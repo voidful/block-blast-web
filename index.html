@@ -242,6 +242,46 @@
         /* 粒子畫布跟著縮，避免超出點擊區 */
         .fx-layer{ inset: var(--gap) }
       }
+        /* === Fullscreen, No-Scroll Base ======================================= */
+        html, body {
+          width: 100%;
+          height: 100%;
+          overflow: hidden;                 /* 禁止頁面捲動（主畫面） */
+          overscroll-behavior: none;        /* 禁止邊緣彈性捲動 */
+        }
+
+        body {
+          /* 避免工具列顯示/隱藏造成背景位移的錯覺 */
+          background-attachment: fixed;
+        }
+
+        /* App 固定吃滿可視高（svh 在 iOS/Android 都相對準確） */
+        .app{
+          height: 100svh;                   /* 以小可視高為基準 */
+          max-height: 100svh;
+          overflow: hidden;                 /* 內層也不產生滾動 */
+          padding-bottom: env(safe-area-inset-bottom); /* iPhone 底部安全區 */
+        }
+
+        /* 允許 overlay 內部可獨立滾動（不影響主畫面） */
+        .overlay .dialog {
+          max-height: min(86svh, 520px);
+          overflow: auto;
+        }
+
+        /* 略縮主畫面的外距，避免高度邊界造成溢出 */
+        @media (max-width: 900px) {
+          .app { padding: 8px 0 10px; }
+        }
+
+        /* 極小高度（例如橫向手機或瀏海很高）時進入緊湊模式 */
+        @media (max-height: 560px) {
+          :root{ --gap: 4px; --tray-cell: 22px; }
+          .help{ display: none; }           /* 幫助說明在極小高隱藏 */
+          .slot{ min-height: 76px; padding: 6px; }
+          .hold-slot{ min-height: 56px; padding: 6px; }
+          .controls > button{ padding: 6px 8px; font-size: 12px; }
+        }
     </style>
 </head>
 <body>
@@ -1043,6 +1083,55 @@
       window.addEventListener("orientationchange", onViewportChange);
       window.addEventListener("resize", onViewportChange);
 
+      function fitFullscreen() {
+        // 1) 取得可視高度（優先 visualViewport，回退 innerHeight）
+        const vh = (window.visualViewport ? Math.floor(window.visualViewport.height) : window.innerHeight);
+
+        // 2) 量測主區塊高度：header / hold-row / tray / help
+        const app = document.querySelector('.app');
+        const styles = getComputedStyle(app);
+        const padV = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
+        const gapV = parseFloat(styles.gap) || 0;
+
+        const hHeader  = document.querySelector('header')?.getBoundingClientRect().height || 0;
+        const hHold    = document.querySelector('.hold-row')?.getBoundingClientRect().height || 0;
+        const hTray    = document.querySelector('.tray')?.getBoundingClientRect().height || 0;
+        const hHelp    = document.querySelector('.help')?.getBoundingClientRect().height || 0;
+
+        // grid 之間大約有 4 個垂直 gap（header/board/hold/tray/help 五區）
+        const totalGaps = gapV * 4;
+
+        // 3) 可用高度 = 視窗可視高 - 其他區塊 - 內距 - 安全區
+        const safeBottom = (window.CSS && CSS.supports('padding-bottom: env(safe-area-inset-bottom)'))
+          ? (parseFloat(getComputedStyle(document.body).paddingBottom) || 0) : 0;
+
+        const availableH = vh - (hHeader + hHold + hTray + hHelp + padV + totalGaps + safeBottom);
+
+        // 4) 可用寬度（留一點左右邊界）
+        const availableW = Math.min(window.innerWidth * 0.96, window.innerWidth - 8);
+
+        // 5) 棋盤邊長 = min(可用高, 可用寬, 上限)
+        const boardPx = Math.max(240, Math.floor(Math.min(availableH, availableW, 820)));
+
+        // 6) 寫回 CSS 變數，覆蓋原本的 clamp
+        document.documentElement.style.setProperty('--board-size', boardPx + 'px');
+      }
+
+      // 初次與各種視窗變化時重算（包含工具列動態變化）
+      function bindFitEvents(){
+        const rerun = () => { fitFullscreen(); if (typeof resizeFX === 'function') resizeFX(); if (typeof clearGhost === 'function') clearGhost(); };
+        window.addEventListener('resize', rerun, { passive: true });
+        window.addEventListener('orientationchange', rerun, { passive: true });
+        if (window.visualViewport) window.visualViewport.addEventListener('resize', rerun, { passive: true });
+        rerun();
+      }
+
+      // 在你的啟動區塊最後面呼叫一次
+      bindFitEvents();
+
+      // 可選：阻擋雙指縮放與雙擊放大，避免誤觸造成 viewport 改變
+      document.addEventListener('gesturestart', e => e.preventDefault());
+      document.addEventListener('dblclick', e => e.preventDefault());
     })();
 </script>
 </body>
