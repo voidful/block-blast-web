@@ -29,8 +29,11 @@
     :root{ --dur-pop:.06s; --dur-place:.08s; --dur-clear:.12s; --dur-toast:.5s; }
   }
 
-  /* 一頁滿版、無捲動 */
+  /* 一頁滿版、無捲動；優先使用 svh 減少 iOS 位移 */
   html, body { width:100%; height:100%; overflow:hidden; overscroll-behavior:none; }
+  @supports (height: 100svh){
+    html, body { height: 100svh; }
+  }
   body{
     margin:0;
     font-family: ui-sans-serif, system-ui, "PingFang TC","Noto Sans TC","Microsoft JhengHei", Arial, sans-serif;
@@ -39,18 +42,16 @@
     display:grid; place-items:center;
     background-attachment: fixed;
   }
-  /* FEVER 視覺，僅做內發光，不影響排版 */
+
   body.is-fever .board{
     box-shadow:0 20px 60px rgba(0,0,0,.45), inset 0 0 0 1px #2a2f55, inset 0 0 24px rgba(255,193,101,.28);
   }
-  /* 小高度進入緊湊模式（壓縮邊距/按鈕） */
   body.compact .controls > button{ padding:6px 8px; font-size:12px; border-radius:9px; }
   body.compact header{ row-gap:6px; }
 
   .app{
     width:min(1200px, 96vw);
-    height: 100dvh;
-    height: calc(var(--vh) * 100);
+    height: calc(var(--vh) * 100);   /* 回退用，避免地址列影響 */
     overflow:hidden;
 
     display:grid;
@@ -65,6 +66,9 @@
     gap:16px;
     padding: 16px 0 calc(16px + env(safe-area-inset-bottom));
   }
+  @supports (height: 100svh){
+    .app{ height: 100svh; }
+  }
 
   header{
     grid-area:header; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:0 8px; flex-wrap:wrap;
@@ -77,7 +81,6 @@
   .label{ color:var(--muted); font-size:12px }
   .value{ font-size:22px; font-weight:800 }
 
-  /* Header 內的 FEVER 區塊（非 body 狀態） */
   .fever{ display:flex; align-items:center; gap:8px; min-width:180px; }
   .fever-label{ font-weight:800; font-size:12px; letter-spacing:1px; color:#ffd08a }
   .fever-bar{ width:120px; height:10px; background:#0f1528; border:1px solid #5b3b16; border-radius:999px; overflow:hidden; box-shadow:0 0 10px rgba(255,193,101,.25) inset;}
@@ -135,7 +138,6 @@
   .tile.clearing[data-delay]{ animation-delay: var(--delay); }
   @keyframes clear{ 50%{ transform: scale(.85) } to{ transform: scale(.1); opacity:0 } }
 
-  /* 幽靈/粒子層由 JS 精準對齊棋盤內容盒 */
   .ghost-layer, .fx-layer{
     position:absolute; left:0; top:0; width:0; height:0; pointer-events:none;
   }
@@ -184,7 +186,7 @@
 
   .board.hammer-cursor{ cursor: crosshair; }
 
-  /* 直向手機：優先給棋盤，隱藏說明 */
+  /* 直向手機：Header 改兩欄 + 控制列水平捲動，避免換行撐高導致棋盤跳動 */
   @media (max-width: 900px) and (orientation: portrait), (max-aspect-ratio: 3/4) {
     :root{ --board-size: min(70svh, 94vw); --tray-cell: clamp(22px, 7.2vmin, 34px); --gap: 5px; --tile-radius: 8px; }
     .app{
@@ -208,10 +210,8 @@
     .help{ display:none; }
   }
 
-  /* 高度太小一律藏掉說明，避免擠壓棋盤 */
   @media (max-height: 900px) { .help{ display:none; } }
 
-  /* 測試結果角標（#test 用） */
   .test-badge{ position: fixed; right: 10px; top: 10px; z-index: 10000; font-weight: 900; font-size: 12px; padding: 6px 8px; border-radius: 8px; background: #1a223a; border:1px solid #2a3568; color:#cde; box-shadow:0 6px 16px rgba(0,0,0,.35) }
   .test-badge.fail{ color:#fff; background:#641e32; border-color:#ff6b8a }
 </style>
@@ -343,7 +343,7 @@
 
   /* ========= 棋盤/顏色/狀態 ========= */
   const SIZE = 10;
-  const STORAGE_KEY   = "blockblast_state_v12_poster_mission_music";
+  const STORAGE_KEY   = "blockblast_state_v13_layout_freeze";
   const SETTINGS_KEY  = "blockblast_settings_v4";
   const MISSIONS_KEY  = "blockblast_missions_v1";
   const PALETTE_DEFAULT = ["#7aa2ff","#6ee7b7","#f472b6","#fbbf24","#34d399","#a78bfa","#f87171","#60a5fa","#22d3ee","#f59e0b"];
@@ -447,41 +447,33 @@
     renderHold();
   }
 
-  /* ========= 幽靈座標精準對齊 ========= */
-  function innerOrigin(){ const rect=boardEl.getBoundingClientRect(); const pad=parseFloat(getComputedStyle(boardEl).paddingLeft) || 0; return { left: rect.left + pad, top: rect.top + pad, pad }; }
-  function cellRectRel(x, y){
-    if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return null;
-    const r = cellAt(x,y).getBoundingClientRect();
-    const o = innerOrigin();
-    return { left:r.left-o.left, top:r.top-o.top, width:r.width, height:r.height, right:r.right-o.left, bottom:r.bottom-o.top };
-  }
-  function cellIndexFromPoint(clientX, clientY){
-    for(let y=0;y<SIZE;y++){
-      for(let x=0;x<SIZE;x++){
-        const r = cellAt(x,y).getBoundingClientRect();
-        if(clientX >= r.left && clientX < r.right && clientY >= r.top && clientY < r.bottom){
-          return { gx:x, gy:y };
-        }
-      }
+  /* ========= 版面凍結 / 幽靈層同步 ========= */
+  let layoutFreeze=false;
+  function freezeLayout(){ layoutFreeze=true; }
+  function unfreezeLayout(){ layoutFreeze=false; fitLayout(); }
+  function ensureOverlaySync(){
+    const pad=parseFloat(getComputedStyle(boardEl).paddingLeft)||0;
+    const b=boardEl.getBoundingClientRect();
+    const w=boardWrap.getBoundingClientRect();
+    const L=Math.round(b.left - w.left + pad);
+    const T=Math.round(b.top  - w.top  + pad);
+    const W=Math.round(b.width  - pad*2);
+    const H=Math.round(b.height - pad*2);
+    const need = (Math.abs((parseFloat(ghostEl.style.left||0)) - L) > 1) ||
+                 (Math.abs((parseFloat(ghostEl.style.top ||0)) - T) > 1) ||
+                 (Math.abs((parseFloat(ghostEl.style.width||0)) - W) > 1) ||
+                 (Math.abs((parseFloat(ghostEl.style.height||0)) - H) > 1);
+    if(need){
+      ghostEl.style.left=px(L); ghostEl.style.top=px(T);
+      ghostEl.style.width=px(W); ghostEl.style.height=px(H);
+      fxCanvas.style.left=px(L); fxCanvas.style.top=px(T); fxCanvas.style.width=px(W); fxCanvas.style.height=px(H);
+      const dpr=Math.min(2, window.devicePixelRatio||1);
+      fxCanvas.width  = Math.round(W * dpr);
+      fxCanvas.height = Math.round(H * dpr);
     }
-    return { gx:-1, gy:-1 };
   }
-  function positionOverlayLayers(){
-    const b = boardEl.getBoundingClientRect();
-    const w = boardWrap.getBoundingClientRect();
-    const pad = parseFloat(getComputedStyle(boardEl).paddingLeft) || 0;
-    const L = (b.left - w.left + pad);
-    const T = (b.top  - w.top  + pad);
-    const W = b.width  - pad*2;
-    const H = b.height - pad*2;
-    ghostEl.style.left = px(L); ghostEl.style.top = px(T);
-    ghostEl.style.width = px(W); ghostEl.style.height = px(H);
-    fxCanvas.style.left=px(L); fxCanvas.style.top=px(T); fxCanvas.style.width=px(W); fxCanvas.style.height=px(H);
-    const dpr=Math.min(2, window.devicePixelRatio||1);
-    fxCanvas.width  = Math.round(W * dpr);
-    fxCanvas.height = Math.round(H * dpr);
-    clearGhost();
-  }
+  const ro = new ResizeObserver(()=> ensureOverlaySync());
+  ro.observe(boardEl);
 
   /* ========= 拖曳/幽靈 ========= */
   let drag=null;
@@ -526,6 +518,7 @@
 
   function onPiecePointerDown(e){
     if(state.gameOver) return;
+    freezeLayout();                // 互動期間凍結版面
     clearHint();
     const idx = Number(e.currentTarget.dataset.index);
     const piece = state.tray[idx];
@@ -545,7 +538,7 @@
 
     updateGhost(e.clientX, e.clientY);
   }
-  function onDragMove(e){ if(!drag) return; moveProxy(e.clientX,e.clientY); updateGhost(e.clientX,e.clientY); }
+  function onDragMove(e){ if(!drag) return; ensureOverlaySync(); moveProxy(e.clientX,e.clientY); updateGhost(e.clientX,e.clientY); }
   function onDragEnd(e){
     if(!drag) return;
     const { piece, idx, anchor } = drag;
@@ -558,6 +551,7 @@
     drag = null;
     clearGhost();
     window.removeEventListener("pointermove", onDragMove);
+    unfreezeLayout();              // 結束互動，解除凍結並重新 fit
   }
   function onDragCancel(){
     if(!drag) return;
@@ -565,9 +559,29 @@
     drag = null;
     clearGhost();
     window.removeEventListener("pointermove", onDragMove);
+    unfreezeLayout();
   }
 
+  function cellIndexFromPoint(clientX, clientY){
+    for(let y=0;y<SIZE;y++){
+      for(let x=0;x<SIZE;x++){
+        const r = cellAt(x,y).getBoundingClientRect();
+        if(clientX >= r.left && clientX < r.right && clientY >= r.top && clientY < r.bottom){
+          return { gx:x, gy:y };
+        }
+      }
+    }
+    return { gx:-1, gy:-1 };
+  }
+  function cellRectRel(x, y){
+    if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return null;
+    const r = cellAt(x,y).getBoundingClientRect();
+    const rect=boardEl.getBoundingClientRect();
+    const pad=parseFloat(getComputedStyle(boardEl).paddingLeft) || 0;
+    return { left:r.left-rect.left-pad, top:r.top-rect.top-pad, width:r.width, height:r.height };
+  }
   function updateGhost(clientX, clientY){
+    ensureOverlaySync();  // 每次更新都校正幽靈層參考系
     clearGhost();
     const {gx, gy} = cellIndexFromPoint(clientX, clientY);
     if (gx < 0 || gy < 0) { drag.anchor = null; return; }
@@ -614,11 +628,12 @@
     return { rows, cols };
   }
   function animateAndClear(rows, cols){
+    freezeLayout(); // 動畫期間凍結，避免地址列高度變化導致棋盤重算
     const toClear=[]; const cx=(SIZE-1)/2, cy=(SIZE-1)/2; const delayUnit=16;
     rows.forEach(y=>{ for(let x=0;x<SIZE;x++){ const d=Math.abs(x-cx)*delayUnit; const tile=cellAt(x,y).firstElementChild; tile.classList.add("clearing"); tile.style.setProperty("--delay", `${d}ms`); tile.setAttribute("data-delay",""); toClear.push([x,y,d]); }});
     cols.forEach(x=>{ for(let y=0;y<SIZE;y++){ const d=Math.abs(y-cy)*delayUnit; const tile=cellAt(x,y).firstElementChild; tile.classList.add("clearing"); tile.style.setProperty("--delay", `${d}ms`); tile.setAttribute("data-delay",""); toClear.push([x,y,d]); }});
     const maxDelay = toClear.reduce((m,c)=>Math.max(m,c[2]),0);
-    setTimeout(()=>{ toClear.forEach(([x,y])=> state.board[y][x]=null); renderBoard(); saveState(); }, maxDelay+220);
+    setTimeout(()=>{ toClear.forEach(([x,y])=> state.board[y][x]=null); renderBoard(); saveState(); unfreezeLayout(); }, maxDelay+240);
   }
 
   let comboTimer=null, comboTimeMs=3500;
@@ -779,7 +794,7 @@
     }catch(e){ return false; }
   }
 
-  /* ========= Fullscreen Fit ========= */
+  /* ========= Fullscreen Fit（凍結時只做對齊，不改尺寸） ========= */
   function updateVHVar(){
     const vh = (window.visualViewport ? window.visualViewport.height : window.innerHeight) * 0.01;
     document.documentElement.style.setProperty('--vh', `${vh}px`);
@@ -792,8 +807,25 @@
     root.setProperty('--gap', `${Math.max(4, Math.round(S / 120))}px`);
     root.setProperty('--tile-radius', `${Math.max(6, Math.round(S / 70))}px`);
   }
+  function positionOverlayLayers(){
+    const rect=boardEl.getBoundingClientRect();
+    const wrap=boardWrap.getBoundingClientRect();
+    const pad=parseFloat(getComputedStyle(boardEl).paddingLeft)||0;
+    const L = rect.left - wrap.left + pad;
+    const T = rect.top  - wrap.top  + pad;
+    const W = rect.width  - pad*2;
+    const H = rect.height - pad*2;
+    ghostEl.style.left=px(L); ghostEl.style.top=px(T);
+    ghostEl.style.width=px(W); ghostEl.style.height=px(H);
+    fxCanvas.style.left=px(L); fxCanvas.style.top=px(T); fxCanvas.style.width=px(W); fxCanvas.style.height=px(H);
+    const dpr=Math.min(2, window.devicePixelRatio||1);
+    fxCanvas.width=Math.round(W*dpr); fxCanvas.height=Math.round(H*dpr);
+    clearGhost();
+  }
   function fitLayout(){
     updateVHVar();
+    if(layoutFreeze){ positionOverlayLayers(); return; } // 互動期間不改尺寸，只校正對齊
+
     const vw = window.innerWidth;
     const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
     document.body.classList.toggle('compact', vh < 920 || vw < 480);
@@ -822,7 +854,7 @@
     positionOverlayLayers();
   }
   function bindFitEvents(){
-    const rerun = () => fitLayout();
+    const rerun = () => { if(layoutFreeze) positionOverlayLayers(); else fitLayout(); };
     window.addEventListener('resize', rerun, { passive: true });
     window.addEventListener('orientationchange', rerun, { passive: true });
     if (window.visualViewport) window.visualViewport.addEventListener('resize', rerun, { passive: true });
@@ -830,7 +862,7 @@
     rerun();
   }
 
-  /* ========= 任務系統 ========= */
+  /* ========= 任務系統（同前） ========= */
   let missions = null;
   function getWeekKey(d=new Date()){
     const dt = new Date(d);
@@ -853,82 +885,26 @@
     {id:'w_games5',    title:'完成 5 局', metric:'games', target:5, reward:3},
     {id:'w_stars10',   title:'獲得 10 顆星', metric:'stars', target:10, reward:2}
   ];
-  function seededPick(arr, count, seed){
-    const r = mulberry32(seed|0);
-    const bag = [...arr];
-    const out=[];
-    for(let i=0;i<count && bag.length;i++){
-      const idx = Math.floor(r()*bag.length);
-      out.push(bag.splice(idx,1)[0]);
-    }
-    return out;
-  }
-  function missionsLoad(){
-    const raw = localStorage.getItem(MISSIONS_KEY);
-    if(raw){ try{ missions = JSON.parse(raw); }catch{ missions=null; } }
-    if(!missions) missions = { daily:{ date:"", tasks:[] }, weekly:{ week:"", tasks:[] } };
-    missionsEnsureFresh();
-  }
+  function seededPick(arr, count, seed){ const r = mulberry32(seed|0); const bag=[...arr]; const out=[]; for(let i=0;i<count && bag.length;i++){ const idx=Math.floor(r()*bag.length); out.push(bag.splice(idx,1)[0]); } return out; }
+  function missionsLoad(){ const raw = localStorage.getItem(MISSIONS_KEY); if(raw){ try{ missions=JSON.parse(raw); }catch{ missions=null; } } if(!missions) missions={ daily:{date:"",tasks:[]}, weekly:{week:"",tasks:[]} }; missionsEnsureFresh(); }
   function missionsEnsureFresh(){
-    const today = new Date().toISOString().slice(0,10);
-    if(missions.daily.date !== today){
-      const seed = Number(today.replace(/-/g,'')); // YYYYMMDD
-      const picked = seededPick(DAILY_POOL, 3, seed).map(t=> ({...t, progress:0, claimed:false}));
-      missions.daily = { date: today, tasks: picked };
-    }
-    const wk = getWeekKey();
-    if(missions.weekly.week !== wk){
-      missions.weekly = { week: wk, tasks: WEEKLY_DEF.map(t=> ({...t, progress:0, claimed:false})) };
-    }
+    const today=new Date().toISOString().slice(0,10);
+    if(missions.daily.date!==today){ const seed=Number(today.replace(/-/g,'')); missions.daily={ date:today, tasks: seededPick(DAILY_POOL,3,seed).map(t=>({...t,progress:0,claimed:false})) }; }
+    const wk=getWeekKey(); if(missions.weekly.week!==wk){ missions.weekly={ week:wk, tasks: WEEKLY_DEF.map(t=>({...t,progress:0,claimed:false})) }; }
     missionsSave();
   }
   function missionsSave(){ localStorage.setItem(MISSIONS_KEY, JSON.stringify(missions)); }
-  function missionsAddProgress(metric, delta){
-    ['daily','weekly'].forEach(scope=>{
-      missions[scope].tasks.forEach(t=>{
-        if(t.metric!==metric || t.claimed) return;
-        t.progress = Math.min(t.target, (t.progress||0) + delta);
-      });
-    });
-    missionsSave();
-  }
-  function missionsSetProgressMax(metric, value){
-    ['daily','weekly'].forEach(scope=>{
-      missions[scope].tasks.forEach(t=>{
-        if(t.metric!==metric || t.claimed) return;
-        t.progress = Math.min(t.target, Math.max(t.progress||0, value));
-      });
-    });
-    missionsSave();
-  }
+  function missionsAddProgress(metric, delta){ ['daily','weekly'].forEach(s=>{ missions[s].tasks.forEach(t=>{ if(t.metric!==metric||t.claimed) return; t.progress=Math.min(t.target,(t.progress||0)+delta); }); }); missionsSave(); }
+  function missionsSetProgressMax(metric, value){ ['daily','weekly'].forEach(s=>{ missions[s].tasks.forEach(t=>{ if(t.metric!==metric||t.claimed) return; t.progress=Math.min(t.target,Math.max(t.progress||0,value)); }); }); missionsSave(); }
   function renderMissionsUI(){
-    const renderList = (host, tasks)=>{
-      host.innerHTML="";
-      tasks.forEach((t,i)=>{
-        const wrap=document.createElement('div');
-        wrap.style.cssText="padding:10px 8px;border:1px solid #2a3568;border-radius:10px;margin:6px 0;background:#151a2f;";
-        const p=Math.round(100*(t.progress/t.target));
-        wrap.innerHTML = `
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-            <div style="font-weight:800">${t.title}</div>
-            <div style="font-size:12px;color:#a3acd6">${t.progress} / ${t.target}</div>
-          </div>
-          <div style="position:relative;height:10px;background:#0f1528;border:1px solid #27305b;border-radius:999px;margin:8px 0 6px">
-            <i style="position:absolute;left:0;top:0;height:100%;width:${p}%;background:linear-gradient(90deg,#3ef0b4,#7aa2ff);border-radius:999px"></i>
-          </div>
-          <div style="display:flex;justify-content:flex-end;gap:8px;">
-            <button class="claim" ${ (t.progress>=t.target && !t.claimed) ? "" : "disabled" } data-scope="${host.id==='dailyList'?'daily':'weekly'}" data-idx="${i}">領取 ⭐${t.reward}</button>
-            ${ t.claimed ? '<span style="color:#a3acd6;font-size:12px">已領取</span>' : '' }
-          </div>`;
-        host.appendChild(wrap);
-      });
+    const renderList=(host,tasks)=>{
+      host.innerHTML=""; tasks.forEach((t,i)=>{ const wrap=document.createElement('div'); wrap.style.cssText="padding:10px 8px;border:1px solid #2a3568;border-radius:10px;margin:6px 0;background:#151a2f;"; const p=Math.round(100*(t.progress/t.target));
+        wrap.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div style="font-weight:800">${t.title}</div><div style="font-size:12px;color:#a3acd6">${t.progress} / ${t.target}</div></div>
+          <div style="position:relative;height:10px;background:#0f1528;border:1px solid #27305b;border-radius:999px;margin:8px 0 6px"><i style="position:absolute;left:0;top:0;height:100%;width:${p}%;background:linear-gradient(90deg,#3ef0b4,#7aa2ff);border-radius:999px"></i></div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;"><button class="claim" ${(t.progress>=t.target && !t.claimed) ? "" : "disabled"} data-scope="${host.id==='dailyList'?'daily':'weekly'}" data-idx="${i}">領取 ⭐${t.reward}</button>${t.claimed?'<span style="color:#a3acd6;font-size:12px">已領取</span>':''}</div>`;
+        host.appendChild(wrap); });
       host.querySelectorAll('button.claim').forEach(btn=>{
-        btn.addEventListener('click', ()=>{
-          const scope = btn.dataset.scope; const idx=Number(btn.dataset.idx);
-          const t=missions[scope].tasks[idx]; if(!t || t.claimed || t.progress<t.target) return;
-          t.claimed=true; addStars(t.reward); missionsSave(); renderMissionsUI();
-          toast("任務獎勵已領取 ⭐", "#cfe");
-        });
+        btn.addEventListener('click', ()=>{ const scope=btn.dataset.scope; const idx=Number(btn.dataset.idx); const t=missions[scope].tasks[idx]; if(!t||t.claimed||t.progress<t.target) return; t.claimed=true; addStars(t.reward); missionsSave(); renderMissionsUI(); toast("任務獎勵已領取 ⭐","#cfe"); });
       });
     };
     renderList($("#dailyList"), missions.daily.tasks);
@@ -936,242 +912,51 @@
   }
 
   /* ========= 海報分享 ========= */
-  function roundRectPath(ctx, x,y,w,h,r){
-    const rr = Math.min(r, w/2, h/2);
-    ctx.beginPath();
-    ctx.moveTo(x+rr,y);
-    ctx.arcTo(x+w,y, x+w,y+h, rr);
-    ctx.arcTo(x+w,y+h, x,y+h, rr);
-    ctx.arcTo(x,y+h, x,y, rr);
-    ctx.arcTo(x,y, x+w,y, rr);
-    ctx.closePath();
-  }
+  function roundRectPath(ctx, x,y,w,h,r){ const rr=Math.min(r,w/2,h/2); ctx.beginPath(); ctx.moveTo(x+rr,y); ctx.arcTo(x+w,y, x+w,y+h, rr); ctx.arcTo(x+w,y+h, x,y+h, rr); ctx.arcTo(x,y+h, x,y, rr); ctx.arcTo(x,y, x+w,y, rr); ctx.closePath(); }
   function renderPosterCanvas(){
-    const W=1080, H=1350, PAD=64;
-    const cvs=document.createElement('canvas'); cvs.width=W; cvs.height=H; const ctx=cvs.getContext('2d');
+    const W=1080,H=1350,PAD=64; const cvs=document.createElement('canvas'); cvs.width=W; cvs.height=H; const ctx=cvs.getContext('2d');
     const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#0f1637'); g.addColorStop(1,'#0a0d21'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-
     ctx.fillStyle='#cfe1ff'; ctx.font='700 44px system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif'; ctx.fillText('Block Blast — Flow+ 版', PAD, PAD+32);
-
-    ctx.font='800 40px system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif'; ctx.fillStyle='#ffffff';
-    ctx.fillText(`分數 ${state.score}`, PAD, PAD+96);
-    ctx.fillStyle='#a3acd6'; ctx.font='700 28px system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif';
-    ctx.fillText(`最高分 ${state.best}  |  ⭐ ${state.stars}`, PAD, PAD+136);
-    ctx.fillText(new Date().toLocaleString(), PAD, PAD+168);
-
-    const B = Math.min(W-PAD*2, 860);
-    const boardX = (W-B)/2; const boardY = PAD+200;
-    roundRectPath(ctx, boardX, boardY, B, B, 26); ctx.fillStyle='#0e1228'; ctx.fill();
-    ctx.save(); ctx.clip();
-    const gap = 8, pad = 16;
-    const cellSize = (B - pad*2 - gap*(SIZE-1))/SIZE;
-
-    for(let y=0;y<SIZE;y++){
-      for(let x=0;x<SIZE;x++){
-        const cx = boardX + pad + x*(cellSize+gap);
-        const cy = boardY + pad + y*(cellSize+gap);
-        roundRectPath(ctx, cx, cy, cellSize, cellSize, 10);
-        ctx.fillStyle = '#141837'; ctx.fill();
-        const c = state.board[y][x];
-        if(c){
-          roundRectPath(ctx, cx, cy, cellSize, cellSize, 12);
-          ctx.fillStyle = c; ctx.fill();
-          const gg=ctx.createLinearGradient(cx,cy,cx,cy+cellSize);
-          gg.addColorStop(0,'rgba(255,255,255,.14)'); gg.addColorStop(1,'rgba(0,0,0,.1)');
-          roundRectPath(ctx, cx, cy, cellSize, cellSize, 12); ctx.fillStyle=gg; ctx.fill();
-        }
-      }
-    }
+    ctx.font='800 40px system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif'; ctx.fillStyle='#fff'; ctx.fillText(`分數 ${state.score}`, PAD, PAD+96);
+    ctx.fillStyle='#a3acd6'; ctx.font='700 28px system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif'; ctx.fillText(`最高分 ${state.best}  |  ⭐ ${state.stars}`, PAD, PAD+136); ctx.fillText(new Date().toLocaleString(), PAD, PAD+168);
+    const B=Math.min(W-PAD*2,860); const boardX=(W-B)/2; const boardY=PAD+200; roundRectPath(ctx,boardX,boardY,B,B,26); ctx.fillStyle='#0e1228'; ctx.fill(); ctx.save(); ctx.clip();
+    const gap=8,pad=16,cellSize=(B-pad*2-gap*(SIZE-1))/SIZE;
+    for(let y=0;y<SIZE;y++) for(let x=0;x<SIZE;x++){ const cx=boardX+pad+x*(cellSize+gap), cy=boardY+pad+y*(cellSize+gap); roundRectPath(ctx,cx,cy,cellSize,cellSize,10); ctx.fillStyle='#141837'; ctx.fill(); const c=state.board[y][x]; if(c){ roundRectPath(ctx,cx,cy,cellSize,cellSize,12); ctx.fillStyle=c; ctx.fill(); const gg=ctx.createLinearGradient(cx,cy,cx,cy+cellSize); gg.addColorStop(0,'rgba(255,255,255,.14)'); gg.addColorStop(1,'rgba(0,0,0,.1)'); roundRectPath(ctx,cx,cy,cellSize,cellSize,12); ctx.fillStyle=gg; ctx.fill(); } }
     ctx.restore();
-
-    ctx.fillStyle='#ffd08a'; ctx.font='800 28px system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif';
-    ctx.fillText(`FEVER ${(state.fever.meter|0)}%  ·  COMBO ×${Math.max(1, state.streak)}`, PAD, boardY+B+52);
-
-    ctx.fillStyle='#5a6aa0'; ctx.font='700 22px system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif';
-    ctx.fillText('生成自 Block Blast — Flow+ 版', PAD, H-PAD+6);
-
+    ctx.fillStyle='#ffd08a'; ctx.font='800 28px system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif'; ctx.fillText(`FEVER ${(state.fever.meter|0)}%  ·  COMBO ×${Math.max(1,state.streak)}`, PAD, boardY+B+52);
+    ctx.fillStyle='#5a6aa0'; ctx.font='700 22px system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif'; ctx.fillText('生成自 Block Blast — Flow+ 版', PAD, H-PAD+6);
     return cvs;
   }
   async function sharePoster(){
-    const cvs = renderPosterCanvas();
-    return new Promise((resolve)=>{
-      cvs.toBlob(async blob=>{
-        const file = new File([blob], 'blockblast-poster.png', {type:'image/png'});
-        try{
-          if(navigator.canShare && navigator.canShare({files:[file]})){
-            await navigator.share({ files:[file], title:'Block Blast — Flow+ 版', text:`我在 Flow+ 版拿到 ${state.score} 分！` });
-          }else{
-            const a=document.createElement('a'); a.href=URL.createObjectURL(file); a.download='blockblast-poster.png'; document.body.appendChild(a); a.click(); a.remove();
-            toast("已下載海報", "#cfe");
-          }
-          resolve();
-        }catch(e){ toast("分享已取消", "#ffd08a"); resolve(); }
-      }, 'image/png');
-    });
+    const cvs=renderPosterCanvas();
+    return new Promise((resolve)=>{ cvs.toBlob(async blob=>{ const file=new File([blob],'blockblast-poster.png',{type:'image/png'}); try{ if(navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({ files:[file], title:'Block Blast — Flow+ 版', text:`我在 Flow+ 版拿到 ${state.score} 分！` }); } else { const a=document.createElement('a'); a.href=URL.createObjectURL(file); a.download='blockblast-poster.png'; document.body.appendChild(a); a.click(); a.remove(); toast("已下載海報","#cfe"); } resolve(); }catch(e){ toast("分享已取消","#ffd08a"); resolve(); } },'image/png'); });
   }
 
-  /* ========= 動態音樂（有節拍版 Web Audio） ========= */
-  const music = (function(){
+  /* ========= 動態音樂（節拍版） ========= */
+  const music=(function(){
     let ctx, master, running=false, enabled=true;
-    let hatGain, kickGain, snrGain, bassGain, padGain, padOsc1, padOsc2, padOsc3, padFilter;
-    let currentStep=0, nextNoteTime=0, timer=null, fever=false, comboInternal=0;
+    let hatGain,kickGain,snrGain,bassGain,padGain,padOsc1,padOsc2,padOsc3,padFilter;
+    let currentStep=0,nextNoteTime=0,timer=null,fever=false,comboInternal=0;
     const baseTempo=112;
-
-    const patterns = {
-      hat: [
-        [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
-        [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
-        [1,1,1,1, 1,1,1,0, 1,1,1,1, 1,1,1,0],
-        [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
-        [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
-      ],
-      kick: [
-        [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
-        [1,0,0,0, 0,0,1,0, 1,0,0,1, 0,0,0,0],
-        [1,0,0,1, 0,1,0,0, 1,0,1,0, 0,1,0,0],
-        [1,0,0,1, 0,1,0,0, 1,0,1,0, 0,1,1,0],
-        [1,0,1,0, 0,1,0,1, 1,0,1,0, 0,1,1,0],
-      ],
-      snr: [
-        [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-        [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-        [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-        [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-        [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-      ],
-      bass: [
-        [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
-        [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
-        [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,1,0,0],
-        [1,0,0,0, 0,1,0,0, 1,0,0,1, 0,1,0,0],
-        [1,0,0,0, 0,1,0,1, 1,0,0,1, 0,1,0,1],
-      ],
-    };
-    const mixes = [
-      {hat:.18, kick:.62, snr:.42, bass:0.00, pad:.03},
-      {hat:.24, kick:.68, snr:.48, bass:.22, pad:.04},
-      {hat:.30, kick:.74, snr:.56, bass:.34, pad:.05},
-      {hat:.36, kick:.80, snr:.64, bass:.46, pad:.06},
-      {hat:.42, kick:.86, snr:.72, bass:.58, pad:.08},
-    ];
-    const levelFromCombo = c => (c>=7?4:c>=5?3:c>=3?2:c>=1?1:0);
-
-    function init(){
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if(!AC) return;
-      if(ctx) return;
-      ctx = new AC();
-      master = ctx.createGain(); master.gain.value = 0.7; master.connect(ctx.destination);
-
-      hatGain=ctx.createGain(); kickGain=ctx.createGain(); snrGain=ctx.createGain(); bassGain=ctx.createGain(); padGain=ctx.createGain();
-      [hatGain,kickGain,snrGain,bassGain,padGain].forEach(g=>{ g.gain.value=0; g.connect(master); });
-
-      padOsc1=ctx.createOscillator(); padOsc2=ctx.createOscillator(); padOsc3=ctx.createOscillator();
-      [padOsc1,padOsc2,padOsc3].forEach(o=>o.type='sine');
-      padFilter=ctx.createBiquadFilter(); padFilter.type='lowpass'; padFilter.frequency.value=380;
-      padOsc1.frequency.value=196;    // G3
-      padOsc2.frequency.value=246.94; // B3
-      padOsc3.frequency.value=293.66; // D4
-      padOsc1.connect(padFilter); padOsc2.connect(padFilter); padOsc3.connect(padFilter);
-      padFilter.connect(padGain);
-      padOsc1.start(); padOsc2.start(); padOsc3.start();
-    }
-    function start(){ if(!enabled) return; init(); if(!ctx||running) return; nextNoteTime = ctx.currentTime + 0.05; currentStep = 0; running = true; timer = setInterval(schedule, 25); }
+    const patterns={ hat:[[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],[1,1,1,1,1,1,1,0,1,1,1,1,1,1,1,0],[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]], kick:[[1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],[1,0,0,0,0,0,1,0,1,0,0,1,0,0,0,0],[1,0,0,1,0,1,0,0,1,0,1,0,0,1,0,0],[1,0,0,1,0,1,0,0,1,0,1,0,0,1,1,0],[1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0]], snr:[[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0]], bass:[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],[1,0,0,0,0,0,1,0,1,0,0,0,0,1,0,0],[1,0,0,0,0,1,0,0,1,0,0,1,0,1,0,0],[1,0,0,0,0,1,0,1,1,0,0,1,0,1,0,1]], };
+    const mixes=[{hat:.18,kick:.62,snr:.42,bass:0.00,pad:.03},{hat:.24,kick:.68,snr:.48,bass:.22,pad:.04},{hat:.30,kick:.74,snr:.56,bass:.34,pad:.05},{hat:.36,kick:.80,snr:.64,bass:.46,pad:.06},{hat:.42,kick:.86,snr:.72,bass:.58,pad:.08}];
+    const levelFromCombo=c=>(c>=7?4:c>=5?3:c>=3?2:c>=1?1:0);
+    function init(){ const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return; if(ctx) return; ctx=new AC(); master=ctx.createGain(); master.gain.value=0.7; master.connect(ctx.destination);
+      hatGain=ctx.createGain(); kickGain=ctx.createGain(); snrGain=ctx.createGain(); bassGain=ctx.createGain(); padGain=ctx.createGain(); [hatGain,kickGain,snrGain,bassGain,padGain].forEach(g=>{ g.gain.value=0; g.connect(master); });
+      padOsc1=ctx.createOscillator(); padOsc2=ctx.createOscillator(); padOsc3=ctx.createOscillator(); [padOsc1,padOsc2,padOsc3].forEach(o=>o.type='sine'); padFilter=ctx.createBiquadFilter(); padFilter.type='lowpass'; padFilter.frequency.value=380; padOsc1.frequency.value=196; padOsc2.frequency.value=246.94; padOsc3.frequency.value=293.66; padOsc1.connect(padFilter); padOsc2.connect(padFilter); padOsc3.connect(padFilter); padFilter.connect(padGain); padOsc1.start(); padOsc2.start(); padOsc3.start(); }
+    function start(){ if(!enabled) return; init(); if(!ctx||running) return; nextNoteTime=ctx.currentTime+0.05; currentStep=0; running=true; timer=setInterval(schedule,25); }
     function stop(){ running=false; if(timer) clearInterval(timer), timer=null; }
     async function resume(){ init(); if(!ctx) return; try{ await ctx.resume(); }catch{} start(); }
     function _setEnabled(on){ enabled=on; if(on) start(); else stop(); }
     function _setFever(on){ fever=!!on; }
-    function _setComboLevel(combo){
-      comboInternal = combo; start();
-      if(!ctx) return;
-      const lvl = levelFromCombo(comboInternal);
-      const m = mixes[lvl];
-      const padBoost = fever ? 1.15 : 1.0;
-      hatGain.gain.setTargetAtTime(m.hat,  ctx.currentTime, .05);
-      kickGain.gain.setTargetAtTime(m.kick, ctx.currentTime, .05);
-      snrGain.gain.setTargetAtTime(m.snr,  ctx.currentTime, .05);
-      bassGain.gain.setTargetAtTime(m.bass, ctx.currentTime, .05);
-      padGain.gain.setTargetAtTime(Math.min(0.12, m.pad*padBoost), ctx.currentTime, .20);
-    }
-    function schedule(){
-      if(!ctx) return;
-      const bpm = baseTempo * (fever ? 1.16 : 1.0);
-      while(nextNoteTime < ctx.currentTime + 0.15){
-        scheduleStep(currentStep, nextNoteTime);
-        const secPerBeat = 60.0 / bpm;
-        nextNoteTime += 0.25 * secPerBeat; // 16 分音
-        currentStep = (currentStep + 1) % 16;
-      }
-    }
-    function scheduleStep(step, t){
-      const lvl = levelFromCombo(comboInternal);
-      if(patterns.hat[lvl][step])  playHat(t);
-      if(patterns.kick[lvl][step]) playKick(t);
-      if(patterns.snr[lvl][step])  playSnare(t);
-      if(patterns.bass[lvl][step]) playBass(t, step);
-    }
-    function playHat(t){
-      const src=ctx.createBufferSource();
-      const buffer=ctx.createBuffer(1, (ctx.sampleRate*0.03)|0, ctx.sampleRate);
-      const d=buffer.getChannelData(0);
-      for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1);
-      src.buffer=buffer;
-      const hp=ctx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=6000;
-      const g=ctx.createGain(); g.gain.value=.0001;
-      src.connect(hp).connect(g).connect(hatGain);
-      src.start(t);
-      g.gain.setValueAtTime(.0001,t);
-      g.gain.linearRampToValueAtTime(.7,t+.002);
-      g.gain.exponentialRampToValueAtTime(.0001,t+.06);
-    }
-    function playKick(t){
-      const o=ctx.createOscillator(); o.type='sine';
-      const g=ctx.createGain(); g.gain.value=.0001;
-      o.frequency.setValueAtTime(140,t);
-      o.frequency.exponentialRampToValueAtTime(42,t+.12);
-      o.connect(g).connect(kickGain);
-      o.start(t);
-      g.gain.setValueAtTime(.0001,t);
-      g.gain.linearRampToValueAtTime(1.0,t+.005);
-      g.gain.exponentialRampToValueAtTime(.0001,t+.18);
-      o.stop(t+.2);
-    }
-    function playSnare(t){
-      const src=ctx.createBufferSource();
-      const buffer=ctx.createBuffer(1, (ctx.sampleRate*0.18)|0, ctx.sampleRate);
-      const d=buffer.getChannelData(0);
-      for(let i=0;i<d.length;i++){ const env = 1 - i/d.length; d[i]=(Math.random()*2-1)*env; }
-      src.buffer=buffer;
-      const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1800; bp.Q.value=.6;
-      const g=ctx.createGain(); g.gain.value=.0001;
-      src.connect(bp).connect(g).connect(snrGain);
-      src.start(t);
-      g.gain.setValueAtTime(.0001,t);
-      g.gain.linearRampToValueAtTime(.9,t+.008);
-      g.gain.exponentialRampToValueAtTime(.0001,t+.22);
-    }
-    function playBass(t, step){
-      const o=ctx.createOscillator(); o.type='sawtooth';
-      const g=ctx.createGain(); g.gain.value=.0001;
-      const f=ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=360 + (fever?140:0);
-      const notes=[55, 73.42, 65.41];
-      const n = (step<8) ? notes[0] : (step<12 ? notes[1] : notes[2]);
-      o.frequency.setValueAtTime(n, t);
-      o.connect(f).connect(g).connect(bassGain);
-      o.start(t);
-      g.gain.setValueAtTime(.0001,t);
-      g.gain.linearRampToValueAtTime(.7,t+.02);
-      g.gain.exponentialRampToValueAtTime(.0001,t+.28);
-      o.stop(t+.32);
-    }
-
-    return {
-      init, start, stop, resume,
-      setEnabled(on){ _setEnabled(on); },
-      setTempo(){},
-      setFever(on){ _setFever(on); _setComboLevel(comboInternal); },
-      setComboLevel(combo){ _setComboLevel(combo); }
-    };
+    function _setComboLevel(combo){ comboInternal=combo; start(); if(!ctx) return; const lvl=levelFromCombo(comboInternal); const m=mixes[lvl]; const padBoost=fever?1.15:1.0; hatGain.gain.setTargetAtTime(m.hat,ctx.currentTime,.05); kickGain.gain.setTargetAtTime(m.kick,ctx.currentTime,.05); snrGain.gain.setTargetAtTime(m.snr,ctx.currentTime,.05); bassGain.gain.setTargetAtTime(m.bass,ctx.currentTime,.05); padGain.gain.setTargetAtTime(Math.min(0.12,m.pad*padBoost),ctx.currentTime,.20); }
+    function schedule(){ if(!ctx) return; const bpm=baseTempo*(fever?1.16:1.0); while(nextNoteTime<ctx.currentTime+0.15){ scheduleStep(currentStep,nextNoteTime); const secPerBeat=60.0/bpm; nextNoteTime+=0.25*secPerBeat; currentStep=(currentStep+1)%16; } }
+    function scheduleStep(step,t){ const lvl=levelFromCombo(comboInternal); if(patterns.hat[lvl][step]) playHat(t); if(patterns.kick[lvl][step]) playKick(t); if(patterns.snr[lvl][step]) playSnare(t); if(patterns.bass[lvl][step]) playBass(t,step); }
+    function playHat(t){ const src=ctx.createBufferSource(); const buffer=ctx.createBuffer(1,(ctx.sampleRate*0.03)|0,ctx.sampleRate); const d=buffer.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1); src.buffer=buffer; const hp=ctx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=6000; const g=ctx.createGain(); g.gain.value=.0001; src.connect(hp).connect(g).connect(hatGain); src.start(t); g.gain.setValueAtTime(.0001,t); g.gain.linearRampToValueAtTime(.7,t+.002); g.gain.exponentialRampToValueAtTime(.0001,t+.06); }
+    function playKick(t){ const o=ctx.createOscillator(); o.type='sine'; const g=ctx.createGain(); g.gain.value=.0001; o.frequency.setValueAtTime(140,t); o.frequency.exponentialRampToValueAtTime(42,t+.12); o.connect(g).connect(kickGain); o.start(t); g.gain.setValueAtTime(.0001,t); g.gain.linearRampToValueAtTime(1.0,t+.005); g.gain.exponentialRampToValueAtTime(.0001,t+.18); o.stop(t+.2); }
+    function playSnare(t){ const src=ctx.createBufferSource(); const buffer=ctx.createBuffer(1,(ctx.sampleRate*0.18)|0,ctx.sampleRate); const d=buffer.getChannelData(0); for(let i=0;i<d.length;i++){ const env=1-i/d.length; d[i]=(Math.random()*2-1)*env; } src.buffer=buffer; const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1800; bp.Q.value=.6; const g=ctx.createGain(); g.gain.value=.0001; src.connect(bp).connect(g).connect(snrGain); src.start(t); g.gain.setValueAtTime(.0001,t); g.gain.linearRampToValueAtTime(.9,t+.008); g.gain.exponentialRampToValueAtTime(.0001,t+.22); }
+    function playBass(t, step){ const o=ctx.createOscillator(); o.type='sawtooth'; const g=ctx.createGain(); g.gain.value=.0001; const f=ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=360+(fever?140:0); const notes=[55,73.42,65.41]; const n=(step<8)?notes[0]:(step<12?notes[1]:notes[2]); o.frequency.setValueAtTime(n,t); o.connect(f).connect(g).connect(bassGain); o.start(t); g.gain.setValueAtTime(.0001,t); g.gain.linearRampToValueAtTime(.7,t+.02); g.gain.exponentialRampToValueAtTime(.0001,t+.28); o.stop(t+.32); }
+    return { init, start, stop, resume, setEnabled(on){ _setEnabled(on); }, setTempo(){}, setFever(on){ _setFever(on); _setComboLevel(comboInternal); }, setComboLevel(combo){ _setComboLevel(combo); } };
   })();
 
   /* ========= 事件 ========= */
@@ -1256,11 +1041,10 @@
     if(e.key==='Escape'){ clearGhost(); clearHint(); disableHammer(); }
   });
 
-  // 任何點擊啟動音訊（行動裝置限制）
   window.addEventListener('pointerdown', ()=>{ if(state.settings.audio) music.resume(); }, { once:true });
 
   function newGame(){
-    if(state.settings.audio) music.resume(); // 確保按下新遊戲就有節拍
+    if(state.settings.audio) music.resume();
     state.board=emptyBoard(); state.score=0; state.tray=[null,null,null]; state.usedThisSet=0; state.history=[]; state.gameOver=false;
     state.streak=0; setFeverMeter(0); document.body.classList.remove("is-fever"); state.undoCharges=3;
     clearGhost(); clearHint(); disableHammer();
@@ -1280,33 +1064,6 @@
   renderBoard(); renderTray(); if(feverFill) feverFill.style.width=`${state.fever.meter}%`;
   bindFitEvents();
   music.setEnabled(state.settings.audio);
-
-  /* ========= 輕量自測（#test 啟用） ========= */
-  function testBadge(msg, ok){
-    const b=document.createElement('div'); b.className='test-badge'+(ok?'':' fail'); b.textContent=msg; document.body.appendChild(b); setTimeout(()=>b.remove(), 2800);
-  }
-  function runQuickTests(){
-    try{
-      const p1 = shape(["XX"]); const pp1={...p1, color:"#fff"};
-      let ok1 = canPlace(pp1,0,0) && !canPlace(pp1,9,0);
-
-      state.board=emptyBoard(); let tmp=[pickPiece(),pickPiece(),pickPiece()]; let tries=0;
-      while(!hasAnyValidMoveForTray(tmp) && tries<40){ tmp=[pickPiece(),pickPiece(),pickPiece()]; tries++; }
-      let ok2 = hasAnyValidMoveForTray(tmp);
-
-      state.board=emptyBoard();
-      for(let x=0;x<SIZE-2;x++) state.board[0][x]="#ccc";
-      const p2 = shape(["XXX"]); const pp2={...p2, color:"#fff"};
-      pp2.cells.forEach(([dx,dy])=>{ state.board[0][SIZE-3+dx]="#fff"; });
-      const lines = findFullLines();
-      let ok3 = lines.rows.includes(0);
-
-      const ok = ok1 && ok2 && ok3;
-      testBadge(ok?"TEST PASS":"TEST FAIL", ok);
-      renderBoard();
-    }catch(e){ testBadge("TEST EXCEPTION", false); }
-  }
-  if(location.hash==="#test"){ runQuickTests(); }
 
 })();
 </script>
