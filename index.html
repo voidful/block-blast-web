@@ -56,7 +56,7 @@
                inset 0 0 24px rgba(255,193,101,.28);
   }
 
-  /* ====== 版面：預設（直向/窄螢幕）上下結構 ====== */
+  /* ====== 版面：直向（上下結構） ====== */
   .app{
     width:min(1200px,96vw);
     height:calc(var(--vh)*100);
@@ -74,37 +74,6 @@
     padding:16px 0 calc(16px + env(safe-area-inset-bottom));
   }
   @supports (height:100svh){ .app{ height:100svh; } }
-
-  /* ====== 版面：橫向（左右佈局）======= */
-  @media (min-aspect-ratio: 5/4) and (min-width: 900px){
-  .app{
-    width:100vw;
-    height:calc(var(--vh)*100);
-    /* 兩欄一樣寬：以 --side-w 為欄寬（由 JS 設為 35vw 的像素值） */
-    grid-template-columns: var(--side-w) var(--side-w);
-    grid-template-areas:
-      "header header"
-      "hold   board"
-      "tray   board"
-      "help   board";
-    grid-template-rows: auto 1fr auto auto;
-    gap:18px 24px;
-    justify-content:center; /* 讓 70% 的雙欄置中 */
-    padding:14px 18px calc(14px + env(safe-area-inset-bottom));
-  }
-
-  /* 左欄三塊都吃滿左欄寬 */
-  .hold-row, .tray, .help{
-    width:var(--side-w);
-    margin:0;
-  }
-
-  /* 右欄棋盤區塊置中（在自己的 35% 欄寬內） */
-  .board-wrap{ align-self:center; justify-self:center; }
-
-  /* 橫向也顯示玩法說明，成為左欄最下方一塊 */
-  .help{ display:block; }
-}
 
   header{
     grid-area:header; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:0 8px; flex-wrap:wrap;
@@ -177,7 +146,6 @@
   .ghost-cell{ position:absolute; border-radius:var(--tile-radius); opacity:.6; box-shadow:0 0 0 2px rgba(74,222,128,.9) inset; background:rgba(74,222,128,.14) }
   .ghost-invalid{ box-shadow:0 0 0 2px rgba(255,122,122,.85) inset; background:rgba(255,122,122,.12) }
 
-  /* 暫存列（左欄） */
   .hold-row{
     grid-area:hold;
     width:var(--board-size);
@@ -270,6 +238,28 @@
     .controls>button{ padding:8px 10px; font-size:12px; border-radius:9px }
     .help{ display:none }
   }
+
+  /* ====== 版面：橫向（左右 35% + 35%，整體 70% 寬，置中）======= */
+  @media (min-aspect-ratio: 5/4) and (min-width: 900px){
+    .app{
+      width:100vw;
+      height:calc(var(--vh)*100);
+      grid-template-columns: var(--side-w) var(--side-w);
+      grid-template-areas:
+        "header header"
+        "hold   board"
+        "tray   board"
+        "help   board";
+      grid-template-rows: auto 1fr auto auto;
+      gap:18px 24px;
+      justify-content:center;  /* 讓 70% 的雙欄置中 */
+      padding:14px 18px calc(14px + env(safe-area-inset-bottom));
+    }
+    .hold-row, .tray, .help{ width:var(--side-w); margin:0; }
+    .board-wrap{ align-self:center; justify-self:center; }
+    .help{ display:block; }
+  }
+
   @media (max-height:900px){ .help{ display:none } }
 </style>
 </head>
@@ -386,7 +376,6 @@
 
   /* ========= 參數 ========= */
   const GRID = 8;
-  const SIZE = GRID;
   document.documentElement.style.setProperty('--grid-size', String(GRID));
 
   /* ========= 小工具 ========= */
@@ -394,11 +383,14 @@
   const $all = sel => Array.from(document.querySelectorAll(sel));
   const clamp = (v,a,b)=> Math.max(a, Math.min(b, v));
   const px = v => Math.round(v) + "px";
+  const isCoarse = window.matchMedia && window.matchMedia("(pointer:coarse)").matches;
   const buzz = pat => { if(!state.settings.haptics) return; try{ navigator.vibrate && navigator.vibrate(pat); }catch{} };
+  function commasep(n){ return (n||0).toLocaleString('zh-Hant'); }
   function announce(msg){ const el=$("#sr-live"); if(!el) return; el.textContent=""; setTimeout(()=> el.textContent=msg, 10); }
   const toastHost = $("#toasts");
   function toast(text,color="#fff"){ const el=document.createElement("div"); el.className="toast"; el.textContent=text; el.style.left="50%"; el.style.top="12%"; el.style.color=color; toastHost.appendChild(el); setTimeout(()=> el.remove(), 900); }
   function showToastAt(x,y,text,color="#fff"){ const el=document.createElement("div"); el.className="toast"; el.textContent=text; el.style.left=`${x}px`; el.style.top=`${y}px`; el.style.color=color; toastHost.appendChild(el); setTimeout(()=> el.remove(), 900); }
+  const rafBatch = (fn=>{ let p=0; return ()=>{ if(p) return; p=requestAnimationFrame(()=>{ p=0; try{ fn(); }catch{} }); }; });
 
   /* ========= 星星沿 FEVER 條飛入 + 流光依比例 ========= */
   function flyStarsToFever(count, fromRect){
@@ -469,7 +461,6 @@
     i.style.transition='transform .18s ease'; i.style.transform='scale(1.02)';
     setTimeout(()=>{ i.style.transform='scale(1)'; }, 180);
   }
-  /* 依 FEVER 填滿比例動態控制掃描距離 */
   function sweepFeverBar(){
     const bar=$(".fever-bar"); const fill=$("#feverFill"); if(!bar) return;
     const br=bar.getBoundingClientRect(); const fr=fill ? fill.getBoundingClientRect() : {width:0,left:br.left};
@@ -484,6 +475,7 @@
   const RNG = { next: Math.random, useSystem(){ this.next=Math.random; }, useSeed(seed){ this.next = mulberry32(seed|0); } };
 
   /* ========= 棋盤/狀態 ========= */
+  const SIZE = GRID;
   const STORAGE_KEY   = "blockblast_state_v23_landscape_lr";
   const SETTINGS_KEY  = "blockblast_settings_v4";
   const MISSIONS_KEY  = "blockblast_missions_v1";
@@ -616,7 +608,7 @@
   buildBoardUI();
 
   function renderHUD(){
-    scoreEl.textContent=state.score; bestEl.textContent=state.best;
+    scoreEl.textContent=commasep(state.score); bestEl.textContent=commasep(state.best);
     $("#btn-undo").textContent=`復原 ×${state.undoCharges}`;
     starsEl.textContent = state.stars;
     $("#dailyTag").style.display = (state.mode==='daily')?'inline':'none';
@@ -747,7 +739,7 @@
       fxCanvas.height = Math.round(H * dpr);
     }
   }
-  const ro = new ResizeObserver(()=> ensureOverlaySync());
+  const ro = new ResizeObserver(()=> rafBatch(ensureOverlaySync));
   ro.observe(boardEl);
 
   /* ========= 近距離自動吸附 ========= */
@@ -758,7 +750,7 @@
     const stepX = (SIZE>1) ? (c10.left - c00.left) : c00.width;
     const stepY = (SIZE>1) ? (c01.top  - c00.top ) : c00.height;
     const boardRect = boardEl.getBoundingClientRect();
-    const magnet = Math.max(c00.width * 0.5, 18);
+    const magnet = isCoarse ? Math.max(c00.width * 0.75, 26) : Math.max(c00.width * 0.5, 18);
     if(clientX < boardRect.left - magnet || clientX > boardRect.right + magnet ||
        clientY < boardRect.top  - magnet || clientY > boardRect.bottom + magnet){
       return {gx:-1, gy:-1};
@@ -852,7 +844,7 @@
 
     updateGhost(e.clientX,e.clientY);
   }
-  function onDragMove(e){ if(!drag) return; ensureOverlaySync(); moveProxy(e.clientX,e.clientY); updateGhost(e.clientX,e.clientY); }
+  function onDragMove(e){ if(!drag) return; rafBatch(ensureOverlaySync); moveProxy(e.clientX,e.clientY); updateGhost(e.clientX,e.clientY); }
   function onDragEnd(e){
     if(!drag) return;
     const {piece, idx, anchor}=drag;
@@ -1253,7 +1245,7 @@
     const fromEl = slot?.querySelector('.piece');
     if(!fromEl){ state.tutorial.busy=false; return; }
     const proxy = fromEl.cloneNode(true);
-    proxy.classList.add("guide-proxy");
+    proxy.className="guide-proxy";
     document.body.appendChild(proxy);
 
     const rootCS = getComputedStyle(document.documentElement);
@@ -1262,22 +1254,15 @@
     const naturalW = best.p.w * trayCell + (best.p.w - 1) * gap;
     const bboxW = fromEl.getBoundingClientRect().width;
     const scale = parseFloat(fromEl.dataset.scale) || (bboxW / naturalW);
-    const offX = (0 * (trayCell + gap) + trayCell/2) * scale;
-    const offY = (0 * (trayCell + gap) + trayCell/2) * scale;
-    proxy.dataset.offX = offX; proxy.dataset.offY = offY; proxy.dataset.scale = scale;
+    proxy.dataset.scale = scale;
 
     const mini = fromEl.querySelector('.cell-mini');
     const r0 = mini.getBoundingClientRect();
-    const startCx = r0.left + r0.width/2;
-    const startCy = r0.top  + r0.height/2;
-    proxy.style.transform = `translate(${startCx - offX}px, ${startCy - offY}px) scale(${scale})`;
+    proxy.style.transform = `translate(${r0.left}px, ${r0.top}px) scale(${scale})`;
 
     const targetRect = cellAt(best.x, best.y).getBoundingClientRect();
-    const targetCx = targetRect.left + targetRect.width/2;
-    const targetCy = targetRect.top  + targetRect.height/2;
-
-    await animateProxyTo(proxy, targetCx - offX, startCy - offY, 180, 'cubic-bezier(.22,.61,.36,1)');
-    await animateProxyTo(proxy, targetCx - offX, targetCy - offY, 360, 'cubic-bezier(.16,.84,.23,1)');
+    await animateProxyTo(proxy, targetRect.left, r0.top, 180, 'cubic-bezier(.22,.61,.36,1)');
+    await animateProxyTo(proxy, targetRect.left, targetRect.top, 360, 'cubic-bezier(.16,.84,.23,1)');
 
     proxy.remove();
     commitPlacement(best.p, best.idx, best.x, best.y);
@@ -1383,7 +1368,7 @@
     stopTutorial();
   }
 
-  /* ========= Fullscreen Fit：左右耦合縮放 ========= */
+  /* ========= Fullscreen Fit：直向防溢位 + 橫向 70%（左右各 35%） ========= */
   function updateVHVar(){
     const vh=(window.visualViewport?window.visualViewport.height:window.innerHeight)*0.01;
     document.documentElement.style.setProperty('--vh', `${vh}px`);
@@ -1407,40 +1392,74 @@
     const dpr=Math.min(2, window.devicePixelRatio||1); $("#fx").width=Math.round(W*dpr); $("#fx").height=Math.round(H*dpr);
     clearGhost();
   }
-function fitLayout(){
-  updateVHVar();
 
-  const vw = window.innerWidth;
-  const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-
-  const isLandscape = (vw >= 900 && vw / vh >= 1.25);
-  const SmaxByH    = Math.min(860, vh * 0.90);     // 高度上限（保留上下邊距與安全區）
-
-  if (isLandscape) {
-    // 每欄 35%（轉為像素），做基本的 min clamp，避免過窄的布局
-    const side = Math.max(320, Math.floor(vw * 0.35));
-    // 棋盤邊長：裝進 35% 欄寬，且不能超過高度上限
-    const S    = Math.max(260, Math.min(SmaxByH, side));
-
-    // 寫入 CSS 變數，讓 .app/左欄/右欄都用到同一個欄寬
-    document.documentElement.style.setProperty('--side-w', side + 'px');
-
-    setSizes(S);           // 推導棋盤 cell/gap/圓角等
-    positionOverlayLayers(); // 同步幽靈層與 FX canvas
-    return;
+  function measurePortraitTotal(S){
+    setSizes(S);
+    positionOverlayLayers();
+    const app = $(".app");
+    const headerH = $("header").offsetHeight;
+    const boardH  = $("#board").offsetHeight;
+    const holdH   = $(".hold-row").offsetHeight;
+    const trayH   = $("#tray").offsetHeight;
+    const cs = getComputedStyle(app);
+    const padTop = parseFloat(cs.paddingTop)||0;
+    const padBot = parseFloat(cs.paddingBottom)||0;
+    const rowGap = parseFloat(cs.rowGap)||10;
+    const gaps = rowGap * 3;
+    return headerH + boardH + holdH + trayH + gaps + padTop + padBot;
   }
+  function fitPortraitTight(){
+    const vw = window.innerWidth;
+    const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
 
-  // 直向／窄螢幕維持原本計算
-  const S = Math.min(vw * 0.94, vh * 0.82, 720);
-  setSizes(S);
-  positionOverlayLayers();
-}
+    const Smin = 240;
+    const SmaxByW = vw * 0.94;
+    const SmaxByRule = 720;
+    let lo = Smin, hi = Math.floor(Math.min(SmaxByW, SmaxByRule, vh));
+    let best = lo;
 
+    let test = Math.floor(Math.min(vw*0.94, vh*0.82, 720));
+    let total = measurePortraitTotal(test);
+    if(total <= vh){ best = test; lo = test; }
+
+    for(let i=0; i<14; i++){
+      const mid = Math.floor((lo + hi) / 2);
+      if(mid <= Smin){ best = Smin; break; }
+      const sum = measurePortraitTotal(mid);
+      if(sum <= vh){ best = mid; lo = mid + 1; }
+      else{ hi = mid - 1; }
+    }
+
+    setSizes(best);
+    positionOverlayLayers();
+  }
+  function fitLandscape(){
+    const vw = window.innerWidth;
+    const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    const SmaxByH = Math.min(860, vh * 0.90);
+    const side = Math.max(320, Math.floor(vw * 0.35));   // 左/右欄各 35%
+    const S    = Math.max(260, Math.min(SmaxByH, side)); // 棋盤不超過欄寬與高度上限
+    document.documentElement.style.setProperty('--side-w', side + 'px');
+    setSizes(S);
+    positionOverlayLayers();
+  }
+  function fitLayout(){
+    updateVHVar();
+    const vw = window.innerWidth;
+    const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    const isLandscape = (vw >= 900 && vw / vh >= 1.25);
+    if(isLandscape) fitLandscape();
+    else            fitPortraitTight();
+  }
+  const fitLayoutRAF = rafBatch(fitLayout);
   function bindFitEvents(){
-    const rerun=()=>{ if(layoutFreeze) positionOverlayLayers(); else fitLayout(); };
+    const rerun=()=>{ if(layoutFreeze) rafBatch(ensureOverlaySync)(); else fitLayoutRAF(); };
     window.addEventListener('resize', rerun, {passive:true});
     window.addEventListener('orientationchange', rerun, {passive:true});
-    if(window.visualViewport) window.visualViewport.addEventListener('resize', rerun, {passive:true});
+    if(window.visualViewport){
+      window.visualViewport.addEventListener('resize', rerun, {passive:true});
+      window.visualViewport.addEventListener('scroll', rerun, {passive:true});
+    }
     if(document.fonts && document.fonts.ready) document.fonts.ready.then(rerun);
     rerun();
   }
@@ -1451,6 +1470,7 @@ function fitLayout(){
   renderBoard(); renderTray(); if(feverFill) feverFill.style.width=`${state.fever.meter}%`;
   bindFitEvents();
   music.setEnabled(state.settings.audio);
+
 })();
 </script>
 </body>
