@@ -259,3 +259,20 @@ body.lowfx .slot:hover .pinner{ --mag:1.01; filter:none }
 
 /* 讓遊戲接手手勢 */
 html,body,.app,.board-wrap,.board,.slot,.hold-slot,.piece{ touch-action:none }
+
+/* 拖曳代理：固定定位 + 陰影 + 對齊左上角（由 JS 控制偏移） */
+.drag-proxy,
+.guide-proxy{
+  position: fixed;
+  left: 0; top: 0;
+  pointer-events: none;
+  z-index: 10000;
+  will-change: transform;
+  transform-origin: top left;
+  filter: drop-shadow(0 12px 22px rgba(0,0,0,.35));
+}
+.drag-proxy .cell-mini,
+.guide-proxy .cell-mini{ border-radius: 7px; }
+.drag-proxy{ transform-origin: top left; }
+/* FX 畫布清晰一些（已存在就可略過） */
+.fx-layer{ image-rendering: optimizeQuality; }
