@@ -274,5 +274,5 @@ html,body,.app,.board-wrap,.board,.slot,.hold-slot,.piece{ touch-action:none }
 .drag-proxy .cell-mini,
 .guide-proxy .cell-mini{ border-radius: 7px; }
 .drag-proxy{ transform-origin: top left; }
-/* FX 畫布清晰一些（已存在就可略過） */
+#board, .slot .piece { touch-action: none; }
 .fx-layer{ image-rendering: optimizeQuality; }

@@ -1,4 +1,11 @@
-/* main.js — Block Blast Flow+ 版（含 Tap‑to‑Place、Smooth Drag、Hit 一致化、Clear 預視、Quantized Audio/MIDI、Daily/Missions） */
+/* main.js — Block Blast Flow+ 版
+   - 手機同時支援拖拽 + 兩段式放置（Tap‑to‑Place with slop）
+   - 命中一致化（點擊/拖拽同一邏輯）
+   - 幽靈預視、清行高亮、FEVER 星星沿條飛入
+   - WebAudio（可選 WebMIDI）量化節拍
+   - 每日挑戰 / 任務 / 海報分享 / 教學模式
+   - 橫直版自適應、FPS 降噪
+*/
 
 /* ====== 小工具 ====== */
 const $  = sel => document.querySelector(sel);
@@ -9,7 +16,11 @@ const isCoarse = matchMedia("(pointer:coarse)").matches;
 const lerp = (a,b,t)=> a + (b-a)*t;
 const nowMs = ()=> performance.now();
 
-/* 視覺參數（可依喜好微調） */
+/* 手勢門檻：手機拖拽 + Tap 共存 */
+const SLOP_PX   = isCoarse ? 10 : 6;   // 拖拽啟動像素門檻
+const TAP_MAX_MS = 300;                // 視為點擊的最長時間
+
+/* 視覺參數 */
 const ENABLE_TILT = true;          // 拖曳代理 3D 傾斜
 const ENABLE_SPRING = true;        // 起飛小彈簧（~140ms）
 const DRAG_SPRING_MS = 140;        // 彈簧時長
@@ -108,7 +119,7 @@ function pickPiece(){
 }
 
 /* ====== 狀態 ====== */
-const STORAGE_KEY="bb_flow_full_v33";
+const STORAGE_KEY="bb_flow_full_v34";
 const BEST_KEY="bb_flow_best";
 const SETTINGS_KEY="bb_flow_settings_v6";
 const MISSIONS_KEY="bb_flow_missions_v1";
@@ -153,12 +164,14 @@ function cellAt(x,y){ return boardEl.querySelector(`.cell[data-x="${x}"][data-y=
 buildBoardUI();
 
 function renderHUD(){
-  scoreEl.textContent=state.score.toLocaleString('zh-Hant');
-  bestEl.textContent=state.best.toLocaleString('zh-Hant');
-  $("#btn-undo").textContent=`復原 ×${state.undoCharges}`;
-  starsEl.textContent=state.stars;
-  $("#dailyTag").style.display=(state.mode==='daily')?'inline':'none';
-  $("#dailyTag").textContent=(state.mode==='daily')?'每日挑戰中':'';
+  if(scoreEl) scoreEl.textContent=state.score.toLocaleString('zh-Hant');
+  if(bestEl)  bestEl.textContent=state.best.toLocaleString('zh-Hant');
+  $("#btn-undo") && ($("#btn-undo").textContent=`復原 ×${state.undoCharges}`);
+  if(starsEl) starsEl.textContent=state.stars;
+  if($("#dailyTag")){
+    $("#dailyTag").style.display=(state.mode==='daily')?'inline':'none';
+    $("#dailyTag").textContent=(state.mode==='daily')?'每日挑戰中':'';
+  }
   if(feverFill) feverFill.style.setProperty('--fever', state.fever.meter/100);
 }
 function renderBoard(){
@@ -194,7 +207,7 @@ function renderPieceInto(slotEl,p){
   const inner=document.createElement("div"); inner.className="pinner";
   const el=document.createElement("div"); el.className="piece";
 
-  // 直接用 inline grid，確保 clone 到任何容器都保有 grid
+  // inline grid，確保 clone 到任何容器都保有 grid
   el.style.display = "grid";
   el.style.gridTemplateColumns=`repeat(${p.w}, var(--tray-cell))`;
   el.style.gridTemplateRows=`repeat(${p.h}, var(--tray-cell))`;
@@ -215,7 +228,8 @@ function renderPieceInto(slotEl,p){
   return el;
 }
 function renderHold(){
-  const slot=$("#holdSlot"); slot.innerHTML="";
+  const slot=$("#holdSlot"); if(!slot) return;
+  slot.innerHTML="";
   if(!state.hold){ slot.textContent="（空）"; return; }
   const p=state.hold;
   const wrap=document.createElement("div"); wrap.className="pwrap";
@@ -232,11 +246,12 @@ function renderTray(){
   $$(".slot").forEach(s=>{ s.innerHTML=""; s.classList.add("empty"); s.classList.remove("hint","hover-mag","selected"); });
   state.tray.forEach((p,idx)=>{
     const s=$(`.slot[data-index="${idx}"]`);
+    if(!s) return;
     if(!p){ s.classList.add("empty"); return; }
     const el=renderPieceInto(s,p);
     el.dataset.index=idx;
+    // 手勢門檻：pointerdown 先偵測，移動超過門檻才進入拖拽；否則視為 tap
     el.addEventListener("pointerdown", onPiecePointerDown, {passive:false});
-    el.addEventListener("click", onPieceTapSelect, {passive:false}); // Tap‑to‑Place
   });
   renderHold();
   requestAnimationFrame(fitTrayPieces);
@@ -244,6 +259,7 @@ function renderTray(){
 function fitTrayPieces(){
   $$(".slot .piece").forEach(el=>{
     const slot=el.closest('.slot');
+    if(!slot) return;
     const cols=Number(el.dataset.cols)||parseInt((el.style.gridTemplateColumns.match(/repeat\((\d+)/)||[])[1]||'1',10);
     const rows=Number(el.dataset.rows)||parseInt((el.style.gridTemplateRows.match(/repeat\((\d+)/)||[])[1]||'1',10);
     fitPieceIntoSlot(el, slot, cols, rows);
@@ -258,6 +274,7 @@ function fitTrayPieces(){
 
 /* ====== 幽靈層/FX 畫布定位 ====== */
 function positionOverlayLayers(){
+  if(!boardEl||!boardWrap||!ghostEl||!fx) return;
   const rect=boardEl.getBoundingClientRect();
   const wrap=boardWrap.getBoundingClientRect();
   const padL=parseFloat(getComputedStyle(boardEl).paddingLeft)||0;
@@ -283,9 +300,10 @@ function positionOverlayLayers(){
   fx.height = Math.round(H*dpr);
 }
 const ro=new ResizeObserver(()=>requestAnimationFrame(positionOverlayLayers));
-ro.observe(boardEl); positionOverlayLayers();
+boardEl && ro.observe(boardEl);
+positionOverlayLayers();
 
-/* ====== 把棋盤 (x,y) 轉成 ghost/fx 相對像素 ====== */
+/* 把棋盤 (x,y) 轉成 ghost/fx 相對像素 */
 function cellRectRel(x,y){
   if(x<0||y<0||x>=SIZE||y>=SIZE) return null;
   const r = cellAt(x,y).getBoundingClientRect();
@@ -316,15 +334,17 @@ function triggerFever(durationMs=14000){
   if(state.fever.active) return;
   state.fever.active=true; state.fever.until=Date.now()+durationMs; document.body.classList.add("is-fever");
   state.stats.feverTriggers++;
+  missionsAddProgress && missionsAddProgress('fever',1);
   bus.emit('fever-change', {active:true});
   requestAnimationFrame(function tick(){ if(!state.fever.active) return; if(Date.now()>=state.fever.until){ state.fever.active=false; document.body.classList.remove("is-fever"); setFeverMeter(0); bus.emit('fever-change', {active:false}); } else requestAnimationFrame(tick); });
 }
 
 function setCombo(n){
   state.streak=n;
-  if(n<=0){ comboBar.style.width="0%"; comboTag.classList.remove("show"); bus.emit('combo-change',{combo:0}); return; }
-  comboTag.classList.add("show"); comboTag.textContent=`COMBO ×${n}`;
-  comboTag.style.transform="scale(1)"; requestAnimationFrame(()=> comboTag.style.transform="scale(1.06)");
+  if(n<=0){ comboBar && (comboBar.style.width="0%"); comboTag && comboTag.classList.remove("show"); bus.emit('combo-change',{combo:0}); return; }
+  comboTag && comboTag.classList.add("show");
+  if(comboTag) comboTag.textContent=`COMBO ×${n}`;
+  if(comboTag){ comboTag.style.transform="scale(1)"; requestAnimationFrame(()=> comboTag.style.transform="scale(1.06)"); }
   state.stats.maxCombo=Math.max(state.stats.maxCombo,n);
   bus.emit('combo-change',{combo:n});
 }
@@ -334,7 +354,7 @@ function startComboTimer(){
   if(comboTimer) clearInterval(comboTimer);
   comboTimer=setInterval(()=>{
     const p=clamp((Date.now()-start)/comboTimeMs,0,1);
-    comboBar.style.width=`${(1-p)*100}%`;
+    comboBar && (comboBar.style.width=`${(1-p)*100}%`);
     if(p>=1){ setCombo(0); clearInterval(comboTimer); comboTimer=null; }
   },100);
 }
@@ -437,13 +457,16 @@ function hitCellMagnet(clientX, clientY){
 function cellIndexFromPoint(x,y){ return hitCellStrict(x,y); }
 function nearestCellFromPoint(x,y){ return hitCellMagnet(x,y); }
 
-/* ====== 拖曳（起飛→跟手 + 橡皮筋曲線 + 高亮/磁吸 + 清行預視） ====== */
+/* ====== 拖曳 + 橡皮筋曲線 + 高亮/磁吸 + 清行預視 ====== */
 let drag=null, dragRAF=0, lastMoveEvent=null, highlightCell=null;
 function clearHighlight(){ if(highlightCell){ cellAt(highlightCell.x,highlightCell.y)?.classList.remove('highlight'); } highlightCell=null; }
 function setHighlight(x,y){ if(highlightCell&&(highlightCell.x!==x||highlightCell.y!==y)){ cellAt(highlightCell.x,highlightCell.y)?.classList.remove('highlight'); } const c=cellAt(x,y); if(c){ c.classList.add('highlight'); highlightCell={x,y}; } }
-function clearGhost(){ ghostEl.innerHTML=""; if(drag){ drag.ghostNodes=null; drag.lineNodes=[]; } }
+function clearGhost(){ ghostEl && (ghostEl.innerHTML=""); if(drag){ drag.ghostNodes=null; drag.lineNodes=[]; } }
 
-/* 使用實際 .cell-mini 的中心點來找最近格（最穩） */
+/* 手勢狀態（托盤） */
+let pieceGesture = null; // {idx, src, sourceEl, startX,startY,lastX,lastY,startT,pointerId, dragging}
+
+/* 使用 .cell-mini 中心找最近格（穩定） */
 function computeGrabOffset(e, pieceEl, piece){
   const minis = Array.from(pieceEl.querySelectorAll('.cell-mini'));
   let best = {d: Infinity, sx:0, sy:0};
@@ -467,7 +490,7 @@ function makeProxy(fromEl, grab, piece){
   proxy.className = "drag-proxy";
   document.body.appendChild(proxy);
 
-  // 代理內 .piece 也要保持 grid
+  // 代理內 .piece 也保持 grid
   const pieceNode = proxy;
   pieceNode.style.display = "grid";
   pieceNode.style.gridTemplateColumns = fromEl.style.gridTemplateColumns;
@@ -519,8 +542,8 @@ function moveProxySmooth(x,y){
     (ENABLE_TILT && !lowfx ? `rotateX(${rotX.toFixed(2)}deg) rotateY(${rotY.toFixed(2)}deg)` : '');
 }
 function drawDragCurve(){
-  if(!drag || document.body.classList.contains('lowfx') || state.settings.reduce){
-    const c=fx.getContext('2d'); c.clearRect(0,0,fx.width,fx.height);
+  if(!drag || !fx || document.body.classList.contains('lowfx') || state.settings.reduce){
+    const c=fx?.getContext('2d'); c && c.clearRect(0,0,fx.width,fx.height);
     return;
   }
   const c=fx.getContext('2d'), dpr=Math.min(2, devicePixelRatio||1);
@@ -604,53 +627,137 @@ function showClearPreview(ax,ay,piece,ok){
   R.forEach(mkRow); C.forEach(mkCol);
 }
 
-/* === 拖曳流程 === */
+/* === 托盤手勢：pointerdown → 判斷拖拽 or 點一下（Tap） === */
 function onPiecePointerDown(e){
   if(state.gameOver || (state.tutorial && state.tutorial.active)) return;
-  if(state.settings.tapPlace) return; // Tap 模式下，拖曳改由兩段式，不在 pointerdown 啟動
 
-  const idx=Number(e.currentTarget.dataset.index);
+  const idx  = Number(e.currentTarget.dataset.index);
+  const src  = state.tray[idx]; if(!src) return;
 
-  if(state.awaitingHold){
-    const tmp=state.hold; state.hold=state.tray[idx]; state.tray[idx]=tmp||null;
-    state.awaitingHold=false; renderTray(); saveState(); buzz(12); return;
+  e.preventDefault();
+  e.currentTarget.setPointerCapture?.(e.pointerId);
+
+  pieceGesture = {
+    idx, src,
+    sourceEl: e.currentTarget,
+    startX: e.clientX, startY: e.clientY,
+    lastX:  e.clientX, lastY:  e.clientY,
+    startT: nowMs(), pointerId: e.pointerId,
+    dragging: false
+  };
+
+  // 若關閉 TapPlace（例如桌機），立即進入拖拽；手機則等待 slop
+  if(!state.settings.tapPlace){
+    startDragFromGesture(e);
+    return;
   }
 
-  const src=state.tray[idx]; if(!src) return;
-  const piece=JSON.parse(JSON.stringify(src));
+  addEventListener("pointermove", onPieceGestureMove, {passive:false});
+  addEventListener("pointerup",   onPieceGestureUp,   {passive:false});
+  addEventListener("pointercancel", onPieceGestureUp, {passive:false});
+}
+function onPieceGestureMove(e){
+  if(!pieceGesture) return;
+  pieceGesture.lastX = e.clientX;
+  pieceGesture.lastY = e.clientY;
 
-  e.currentTarget.setPointerCapture(e.pointerId);
-  e.currentTarget.classList.add("grabbed");
+  const dx = e.clientX - pieceGesture.startX;
+  const dy = e.clientY - pieceGesture.startY;
+  const dist = Math.hypot(dx, dy);
 
-  const grab=computeGrabOffset(e, e.currentTarget, piece);
-  const proxy=makeProxy(e.currentTarget, grab, piece);
+  if(!pieceGesture.dragging && dist > SLOP_PX){
+    startDragFromGesture(e);
+  }
 
-  const slotRect = e.currentTarget.getBoundingClientRect();
+  if(pieceGesture.dragging && drag){
+    onDragMove(e);
+  }
+}
+function onPieceGestureUp(e){
+  if(!pieceGesture) return;
+
+  // 如果已切到拖拽，交給拖拽流程收尾
+  if(pieceGesture.dragging){
+    removeEventListener("pointermove", onPieceGestureMove);
+    removeEventListener("pointerup",   onPieceGestureUp);
+    removeEventListener("pointercancel", onPieceGestureUp);
+    onDragEnd(); // 拖拽流程自己會清理
+    pieceGesture = null;
+    return;
+  }
+
+  // 未觸發拖拽 → 視為「點一下」
+  const dt = nowMs() - pieceGesture.startT;
+  const dx = e.clientX - pieceGesture.startX;
+  const dy = e.clientY - pieceGesture.startY;
+  const dist = Math.hypot(dx,dy);
+
+  removeEventListener("pointermove", onPieceGestureMove);
+  removeEventListener("pointerup",   onPieceGestureUp);
+  removeEventListener("pointercancel", onPieceGestureUp);
+
+  const idx = pieceGesture.idx;
+  const src = pieceGesture.src;
+  const el  = pieceGesture.sourceEl;
+  pieceGesture = null;
+
+  if(dist <= SLOP_PX && dt <= TAP_MAX_MS){
+    if(state.awaitingHold){
+      const tmp=state.hold; state.hold=src; state.tray[idx]=tmp||null;
+      state.awaitingHold=false; renderTray(); saveState(); buzz(12);
+      return;
+    }
+    if(state.settings.tapPlace){
+      tapSelectPiece(idx, src, el, e);
+    }else{
+      // 桌機關閉 TapPlace 時，點一下不處理；使用者會拖拽
+    }
+  }
+}
+function startDragFromGesture(e){
+  if(!pieceGesture) return;
+  const idx = pieceGesture.idx;
+  const src = state.tray[idx]; if(!src) return; // 容錯
+
+  // 取消任何 tap 選取預視
+  clearTapSelect(); clearGhost();
+
+  const piece = JSON.parse(JSON.stringify(src));
+  const grab  = computeGrabOffset(e, pieceGesture.sourceEl, piece);
+  const proxy = makeProxy(pieceGesture.sourceEl, grab, piece);
+
+  const slotRect = pieceGesture.sourceEl.getBoundingClientRect();
   const sc = parseFloat(proxy.dataset.scale)||1;
   const startX = slotRect.left + parseFloat(proxy.dataset.offX)*sc;
   const startY = slotRect.top  + parseFloat(proxy.dataset.offY)*sc;
+
+  pieceGesture.sourceEl.classList.add("grabbed");
 
   drag = {
     piece, idx, proxyEl:proxy, grab,
     lastOk:null, anchor:null,
     startX, startY,
-    targetX:e.clientX, targetY:e.clientY,
-    smoothX:startX, smoothY:startY,
-    lastT: nowMs(),
+    targetX: pieceGesture.lastX, targetY: pieceGesture.lastY,
+    smoothX: startX,            smoothY: startY,
+    lastT:  nowMs(),
     launchAt: nowMs(),
     ghostNodes:null,
     lineNodes:[]
   };
 
-  clearGhost(); clearHighlight();
-  moveProxySmooth(drag.smoothX, drag.smoothY);
+  pieceGesture.dragging = true;
+
+  // 改掛拖拽監聽
+  removeEventListener("pointermove", onPieceGestureMove);
+  removeEventListener("pointerup",   onPieceGestureUp);
+  removeEventListener("pointercancel", onPieceGestureUp);
 
   addEventListener("pointermove", onDragMove, {passive:false});
   addEventListener("pointerup",    onDragEnd,  {once:true});
   addEventListener("pointercancel",onDragCancel,{once:true});
 
+  moveProxySmooth(drag.smoothX, drag.smoothY);
   if(!dragRAF) dragRAF=requestAnimationFrame(dragTick);
-  lastMoveEvent=e;
 }
 function onDragMove(e){
   e.preventDefault();
@@ -659,6 +766,7 @@ function onDragMove(e){
   if(drag){
     drag.targetX = latest.clientX;
     drag.targetY = latest.clientY;
+    updateGhost(drag.targetX, drag.targetY); // 即時更新命中
   }
 }
 function dragTick(){
@@ -670,13 +778,12 @@ function dragTick(){
     drag.smoothY = lerp(drag.smoothY, drag.targetY, k);
 
     moveProxySmooth(drag.smoothX, drag.smoothY);
-    updateGhost(drag.smoothX, drag.smoothY);
     drawDragCurve();
 
     dragRAF = requestAnimationFrame(dragTick);
   }else{
     cancelAnimationFrame(dragRAF); dragRAF=0;
-    const c=fx.getContext('2d'); c.clearRect(0,0,fx.width,fx.height);
+    const c=fx?.getContext('2d'); c && c.clearRect(0,0,fx.width,fx.height);
   }
 }
 function onDragEnd(){
@@ -686,7 +793,7 @@ function onDragEnd(){
   $(`.piece[data-index="${idx}"]`)?.classList.remove("grabbed");
   try{ drag.proxyEl.remove(); }catch{}
 
-  const c=fx.getContext('2d'); c.clearRect(0,0,fx.width,fx.height);
+  const c=fx?.getContext('2d'); c && c.clearRect(0,0,fx.width,fx.height);
   clearGhost(); clearHighlight();
 
   if(anchor && anchor.ok){ commitPlacement(piece, idx, anchor.x, anchor.y); buzz(10); }
@@ -696,7 +803,7 @@ function onDragEnd(){
 function onDragCancel(){
   if(!drag) return;
   try{ drag.proxyEl.remove(); }catch{}
-  const c=fx.getContext('2d'); c.clearRect(0,0,fx.width,fx.height);
+  const c=fx?.getContext('2d'); c && c.clearRect(0,0,fx.width,fx.height);
   drag=null; clearGhost(); clearHighlight();
   removeEventListener("pointermove", onDragMove);
 }
@@ -730,7 +837,7 @@ function updateGhost(clientX,clientY){
   else   { clearHighlight(); showClearPreview(ax,ay,drag.piece,false); }
 }
 
-/* ====== Tap‑to‑Place 兩段式放置 ====== */
+/* ====== Tap‑to‑Place 兩段式放置（手機單手友善） ====== */
 let tapSel=null, tapNodes=null, tapLastOk=null, tapAnchor=null, tapTracking=false;
 function clearTapGhost(){ if(tapNodes){ tapNodes.forEach(n=>n.remove()); tapNodes=null; } tapLastOk=null; tapAnchor=null; clearHighlight(); }
 function clearTapSelect(){ if(!tapSel) return; document.querySelector(`.slot[data-index="${tapSel.idx}"]`)?.classList.remove("selected"); clearTapGhost(); tapSel=null; }
@@ -772,25 +879,18 @@ function updateGhostTap(clientX,clientY){
   if(ok){ tapLastOk={x:ax,y:ay}; setHighlight(ax+sx, ay+sy); }
   else   { clearHighlight(); }
 }
-function onPieceTapSelect(e){
-  if(!state.settings.tapPlace) return;
-  if(state.gameOver || (state.tutorial && state.tutorial.active)) return;
-
-  const idx=Number(e.currentTarget.dataset.index);
-  const src=state.tray[idx]; if(!src) return;
-
-  // 再點同一個：取消選取
+function tapSelectPiece(idx, src, sourceEl, e){
   if(tapSel && tapSel.idx===idx){ clearTapSelect(); return; }
+  const piece = JSON.parse(JSON.stringify(src));
+  const grab  = computeGrabOffset(e, sourceEl, piece);
   clearTapSelect();
-
-  const piece=JSON.parse(JSON.stringify(src));
-  const grab=computeGrabOffset(e, e.currentTarget, piece);
   tapSel = { piece, idx, grab };
   document.querySelector(`.slot[data-index="${idx}"]`)?.classList.add("selected");
   toast("點棋盤放下","#cfe");
 }
 function onBoardTapDown(e){
-  if(!state.settings.tapPlace || !tapSel || state.tools.hammer) return;
+  // Tap 選中 + 非錘子 + 沒在拖拽 → 進入跟手預視
+  if(!state.settings.tapPlace || !tapSel || state.tools.hammer || drag) return;
   e.preventDefault();
   tapTracking=true;
   updateGhostTap(e.clientX,e.clientY);
@@ -806,7 +906,7 @@ function onBoardTapUp(){
   clearTapSelect();
 }
 function onBoardTapCancel(){ tapTracking=false; clearTapSelect(); }
-boardEl.addEventListener("pointerdown", onBoardTapDown, {passive:false});
+boardEl && boardEl.addEventListener("pointerdown", onBoardTapDown, {passive:false});
 
 /* ====== 放置邏輯 ====== */
 function commitPlacement(piece, trayIdx, x, y){
@@ -896,6 +996,7 @@ function missionsEnsureFresh(){ const today=new Date().toISOString().slice(0,10)
 function missionsSave(){ localStorage.setItem(MISSIONS_KEY, JSON.stringify(missions)); }
 function renderMissionsUI(){
   const renderList=(host,tasks)=>{
+    if(!host) return;
     host.innerHTML="";
     tasks.forEach((t,i)=>{ const p=Math.round(100*(t.progress/t.target));
       const wrap=document.createElement('div');
@@ -1064,38 +1165,38 @@ async function tutorialPlace(best){
 }
 
 /* ====== 控制/按鈕 ====== */
-$("#btn-new").addEventListener("click", newGame);
-$("#btn-again").addEventListener("click", newGame);
-$("#btn-close").addEventListener("click", ()=> $("#overlayGameOver").classList.remove("show"));
+$("#btn-new")?.addEventListener("click", newGame);
+$("#btn-again")?.addEventListener("click", newGame);
+$("#btn-close")?.addEventListener("click", ()=> $("#overlayGameOver")?.classList.remove("show"));
 
-$("#btn-undo").addEventListener("click", ()=>{
+$("#btn-undo")?.addEventListener("click", ()=>{
   if(!state.history.length||state.undoCharges<=0) return;
   const prev=state.history.pop(); state.undoCharges--;
   state.board=prev.board; state.score=prev.score; state.tray=prev.tray; state.usedThisSet=prev.usedThisSet; state.streak=prev.streak; state.hold=prev.hold; state.fever=prev.fever; state.stats=prev.stats;
   renderBoard(); renderTray(); renderHUD(); saveState();
 });
 
-$("#btn-settings").addEventListener("click", ()=> $("#overlaySettings").classList.add("show"));
-$("#btn-close-settings").addEventListener("click", ()=>{
-  $("#overlaySettings").classList.remove("show");
+$("#btn-settings")?.addEventListener("click", ()=> $("#overlaySettings")?.classList.add("show"));
+$("#btn-close-settings")?.addEventListener("click", ()=>{
+  $("#overlaySettings")?.classList.remove("show");
   state.settings.reduce=$("#opt-reduce")?.checked ?? state.settings.reduce;
   state.settings.colorblind=$("#opt-colorblind")?.checked ?? state.settings.colorblind;
   state.settings.contrast=$("#opt-contrast")?.checked ?? state.settings.contrast;
   state.settings.haptics=$("#opt-haptics")?.checked ?? state.settings.haptics;
   state.settings.audio=$("#opt-audio")?.checked ?? state.settings.audio;
   state.settings.midi=$("#opt-midi")?.checked ?? state.settings.midi;
-  state.settings.tapPlace=$("#opt-tap")?.checked ?? state.settings.tapPlace; // 若 UI 有此選項
+  state.settings.tapPlace=$("#opt-tap")?.checked ?? state.settings.tapPlace;
   saveSettings(); renderTray();
   audio.setEnabled(state.settings.audio);
   if(state.settings.midi && audio.midi && !audio.midiOut){ const outs=[...audio.midi.outputs.values()]; if(outs.length) audio.midiOut=outs[0]; }
 });
 
-$("#btn-hold").addEventListener("click", ()=>{ state.awaitingHold = !state.awaitingHold; toast(state.awaitingHold ? "點托盤任一方塊以暫存／交換" : "已退出暫存模式", state.awaitingHold?"#cfe":"#ffd08a"); });
-$("#btn-shuffle").addEventListener("click", ()=>{ if(!spendStars(1)) return; refillTrayFair(); state.lastActionAt=Date.now(); toast("托盤已重抽","#cfe"); });
-$("#btn-hammer").addEventListener("click", ()=>{ if(state.tools.hammer){ state.tools.hammer=false; boardEl.classList.remove("hammer-cursor"); return; } if(state.stars<=0){ toast("⭐ 不足","#ffd1d1"); return; } state.tools.hammer=true; boardEl.classList.add("hammer-cursor"); toast("點選任一格進行清除","#ffe49a"); });
+$("#btn-hold")?.addEventListener("click", ()=>{ state.awaitingHold = !state.awaitingHold; toast(state.awaitingHold ? "點托盤任一方塊以暫存／交換" : "已退出暫存模式", state.awaitingHold?"#cfe":"#ffd08a"); });
+$("#btn-shuffle")?.addEventListener("click", ()=>{ if(!spendStars(1)) return; refillTrayFair(); state.lastActionAt=Date.now(); toast("托盤已重抽","#cfe"); });
+$("#btn-hammer")?.addEventListener("click", ()=>{ if(state.tools.hammer){ state.tools.hammer=false; boardEl.classList.remove("hammer-cursor"); return; } if(state.stars<=0){ toast("⭐ 不足","#ffd1d1"); return; } state.tools.hammer=true; boardEl.classList.add("hammer-cursor"); toast("點選任一格進行清除","#ffe49a"); });
 
 /* 錘子點擊：嚴格 → 失敗再磁吸（與拖曳一致） */
-boardEl.addEventListener("click",(e)=>{
+boardEl?.addEventListener("click",(e)=>{
   if(!state.tools.hammer) return;
   let hit = hitCellStrict(e.clientX,e.clientY);
   if(hit.gx<0||hit.gy<0) hit = hitCellMagnet(e.clientX,e.clientY);
@@ -1110,35 +1211,37 @@ boardEl.addEventListener("click",(e)=>{
   state.stats.hammer++; toast("已清除 1 格","#cfe");
 });
 
-$("#btn-hint").addEventListener("click", showHint);
-$("#btn-daily").addEventListener("click", ()=>{ const todaySeed=Number(new Date().toISOString().slice(0,10).replace(/-/g,'')); RNG.useSeed(todaySeed); state.mode='daily'; newGame(); toast("每日挑戰開始","#cfe"); });
-$("#btn-pass").addEventListener("click", ()=>{ RNG.useSystem(); state.mode='classic'; newGame(); toast("經典模式","#cfe"); });
-$("#btn-share").addEventListener("click", async ()=>{
+$("#btn-hint")?.addEventListener("click", showHint);
+$("#btn-daily")?.addEventListener("click", ()=>{ const todaySeed=Number(new Date().toISOString().slice(0,10).replace(/-/g,'')); RNG.useSeed(todaySeed); state.mode='daily'; newGame(); toast("每日挑戰開始","#cfe"); });
+$("#btn-pass")?.addEventListener("click", ()=>{ RNG.useSystem(); state.mode='classic'; newGame(); toast("經典模式","#cfe"); });
+$("#btn-share")?.addEventListener("click", async ()=>{
   const data={ title:"Block Blast — Flow+ 版", text:`我在 Flow+ 版拿到 ${state.score} 分！` };
   try{ if(navigator.share){ await navigator.share(data); } else { await navigator.clipboard.writeText(`${data.title}\n${data.text}`); toast("已複製分享文字","#cfe"); } }catch{ toast("分享已取消","#ffd08a"); }
 });
-$("#btn-share-img").addEventListener("click", ()=> sharePoster());
-$("#btn-mission").addEventListener("click", ()=>{ missionsEnsureFresh(); renderMissionsUI(); $("#overlayMission").classList.add("show"); });
-$("#btn-close-mission").addEventListener("click", ()=> $("#overlayMission").classList.remove("show"));
-$("#btn-tutorial").addEventListener("click", ()=>{ state.tutorial.active ? stopTutorial() : startTutorial(); });
+$("#btn-share-img")?.addEventListener("click", ()=> sharePoster());
+$("#btn-mission")?.addEventListener("click", ()=>{ missionsEnsureFresh(); renderMissionsUI(); $("#overlayMission")?.classList.add("show"); });
+$("#btn-close-mission")?.addEventListener("click", ()=> $("#overlayMission")?.classList.remove("show"));
+$("#btn-tutorial")?.addEventListener("click", ()=>{ state.tutorial.active ? stopTutorial() : startTutorial(); });
 
 addEventListener('keydown',(e)=>{
   if(e.key==='n'||e.key==='N') newGame();
-  if(e.key==='u'||e.key==='U') $("#btn-undo").click();
+  if(e.key==='u'||e.key==='U') $("#btn-undo")?.click();
   if(e.key==='h'||e.key==='H') showHint();
   if(e.key==='1'||e.key==='2'||e.key==='3'){
     const i=Number(e.key)-1; const slot=document.querySelector(`.slot[data-index="${i}"] .piece`);
     if(slot && !state.tutorial.active && !state.settings.tapPlace){
-      slot.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true, clientX:innerWidth/2, clientY:innerHeight/2}));
+      // 桌機快速啟動拖拽（直接以畫面中央為初始）
+      const ev = new PointerEvent("pointerdown",{bubbles:true, clientX:innerWidth/2, clientY:innerHeight/2});
+      slot.dispatchEvent(ev);
     }
   }
-  if(e.key==='Escape'){ clearGhost(); clearHighlight(); clearHint(); boardEl.classList.remove("hammer-cursor"); state.tools.hammer=false; state.awaitingHold=false; clearTapSelect(); stopTutorial(); }
+  if(e.key==='Escape'){ clearGhost(); clearHighlight(); clearHint(); boardEl?.classList.remove("hammer-cursor"); state.tools.hammer=false; state.awaitingHold=false; clearTapSelect(); stopTutorial(); }
 });
 
 /* 點一下解鎖 AudioContext */
 addEventListener('pointerdown', ()=>{ if(state.settings.audio) audio.resume(); }, { once:true });
 
-/* ====== 新局 / 結束 ====== */
+/* ====== 新局 / 儲存 / 結束 ====== */
 function saveState(){
   const data={ board:state.board, tray:state.tray, usedThisSet:state.usedThisSet, score:state.score, best:state.best, stars:state.stars, hold:state.hold, fever:state.fever, undoCharges:state.undoCharges, mode:state.mode, stats:state.stats };
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }catch{}
@@ -1169,14 +1272,14 @@ function newGame(){
   refillTrayFair(); renderBoard(); renderTray(); renderHUD(); saveState(); state.lastActionAt=Date.now();
 }
 function endGame(){
-  state.gameOver=true; $("#finalScore").textContent=state.score; $("#overlayGameOver").classList.add("show"); state.stats.games++; announce(`遊戲結束。本局 ${state.score} 分。`);
+  state.gameOver=true; $("#finalScore") && ($("#finalScore").textContent=state.score); $("#overlayGameOver")?.classList.add("show"); state.stats.games++; announce(`遊戲結束。本局 ${state.score} 分。`);
   bus.emit('gameover');
 }
 
 /* ====== 直/橫向自動排版（橫向 70%：左右各 35%） ====== */
 function updateVHVar(){ const vh=(visualViewport?visualViewport.height:innerHeight)*0.01; document.documentElement.style.setProperty('--vh', `${vh}px`); }
 function setSizes(S){ const root=document.documentElement.style; const trayCell=Math.max(22, Math.min(40, Math.round(S/13))); root.setProperty('--board-size', `${Math.round(S)}px`); root.setProperty('--tray-cell', `${trayCell}px`); root.setProperty('--gap', `${Math.max(4, Math.round(S/120))}px`); root.setProperty('--tile-radius', `${Math.max(6, Math.round(S/70))}px`); requestAnimationFrame(fitTrayPieces); }
-function measurePortraitTotal(S){ setSizes(S); positionOverlayLayers(); const app=$(".app"); const header=$("header").offsetHeight; const board=$("#board").offsetHeight; const hold=$(".hold-row").offsetHeight; const tray=$("#tray").offsetHeight; const cs=getComputedStyle(app); const padTop=parseFloat(cs.paddingTop)||0, padBot=parseFloat(cs.paddingBottom)||0, rowGap=parseFloat(cs.rowGap)||10; return header+board+hold+tray+(rowGap*3)+padTop+padBot; }
+function measurePortraitTotal(S){ setSizes(S); positionOverlayLayers(); const app=$(".app"); const header=$("header")?.offsetHeight||0; const board=$("#board")?.offsetHeight||0; const hold=$(".hold-row")?.offsetHeight||0; const tray=$("#tray")?.offsetHeight||0; const cs=getComputedStyle(app||document.body); const padTop=parseFloat(cs.paddingTop)||0, padBot=parseFloat(cs.paddingBottom)||0, rowGap=parseFloat(cs.rowGap)||10; return header+board+hold+tray+(rowGap*3)+padTop+padBot; }
 function fitPortraitTight(){ const vw=innerWidth, vh=(visualViewport?visualViewport.height:innerHeight); let lo=240, hi=Math.floor(Math.min(vw*0.94, vh)), best=lo; let test=Math.floor(Math.min(vw*0.94, vh*0.82, 720)); if(measurePortraitTotal(test)<=vh) best=test, lo=test; for(let i=0;i<14;i++){ const mid=Math.floor((lo+hi)/2); if(mid<=240){best=240;break;} const sum=measurePortraitTotal(mid); if(sum<=vh){ best=mid; lo=mid+1; } else { hi=mid-1; } } setSizes(best); positionOverlayLayers(); }
 function fitLandscape(){ const vw=innerWidth, vh=(visualViewport?visualViewport.height:innerHeight); const SmaxByH=Math.min(860, vh*0.90); const side=Math.max(320, Math.floor(vw*0.35)); const S=Math.max(260, Math.min(SmaxByH, side)); document.documentElement.style.setProperty('--side-w', side+'px'); setSizes(S); positionOverlayLayers(); }
 const fitLayout = (()=>{ let p=0; return ()=>{ if(p) return; p=requestAnimationFrame(()=>{ p=0; updateVHVar(); const vw=innerWidth, vh=(visualViewport?visualViewport.height:innerHeight); (vw>=900 && vw/vh>=1.25)?fitLandscape():fitPortraitTight(); }); }; })();
