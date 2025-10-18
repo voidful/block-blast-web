@@ -1,4 +1,4 @@
-/* main.js — Block Blast Flow+（Drag-only & Overlay-in-Board 版） */
+/* main.js — Block Blast Flow+（Drag-only & Small-Piece Fix 版） */
 
 const $  = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
@@ -101,7 +101,7 @@ function pickPiece(){
 }
 
 /* ========= 狀態 ========= */
-const STORAGE_KEY="bb_flow_full_v35";
+const STORAGE_KEY="bb_flow_full_v36";
 const BEST_KEY="bb_flow_best";
 const SETTINGS_KEY="bb_flow_settings_v6";
 const MISSIONS_KEY="bb_flow_missions_v1";
@@ -136,7 +136,6 @@ const scoreEl=$("#score"), bestEl=$("#best"), starsEl=$("#stars"), feverFill=$("
 const comboTag=$("#comboTag"), comboBar=$("#comboBar");
 
 function buildBoardUI(){
-  // 只填充 #cells，不動 #ghost / #fx
   cellsEl.innerHTML="";
   for(let y=0;y<SIZE;y++) for(let x=0;x<SIZE;x++){
     const cell=document.createElement("div"); cell.className="cell"; cell.dataset.x=x; cell.dataset.y=y;
@@ -164,24 +163,34 @@ function renderBoard(){
   renderHUD();
 }
 
-/* ========= 托盤（縮放置中） ========= */
+/* ========= 托盤（縮放置中，1/2 顆補正） ========= */
 function fitPieceIntoSlot(pieceEl, slot, cols, rows){
-  const trayCell=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tray-cell'))||30;
-  const fillBase=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tray-fill'))||0.94;
-  const maxS=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tray-scale-max'))||1.8;
-  const gap=parseFloat(getComputedStyle(pieceEl).gap)||4;
-  const naturalW=cols*trayCell+(cols-1)*gap;
-  const naturalH=rows*trayCell+(rows-1)*gap;
+  const trayCell = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tray-cell')) || 30;
+  const fillBase = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tray-fill')) || 0.94;
+  const maxS     = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tray-scale-max')) || 1.9;
+  const gap      = parseFloat(getComputedStyle(pieceEl).gap) || 4;
 
-  const scs=getComputedStyle(slot);
-  const availW=slot.clientWidth-(parseFloat(scs.paddingLeft)||0)-(parseFloat(scs.paddingRight)||0);
-  const availH=slot.clientHeight-(parseFloat(scs.paddingTop)||0)-(parseFloat(scs.paddingBottom)||0);
+  const naturalW = cols * trayCell + (cols - 1) * gap;
+  const naturalH = rows * trayCell + (rows - 1) * gap;
 
-  const fill=(Math.max(cols,rows)>=4)? fillBase*0.92 : fillBase;
-  const s=Math.min(maxS, Math.min(availW/naturalW, availH/naturalH)*fill);
-  pieceEl.style.transform=`scale(${s})`; pieceEl.style.transformOrigin='center center';
-  pieceEl.dataset.scale=s; pieceEl.dataset.cols=cols; pieceEl.dataset.rows=rows;
-  pieceEl.style.touchAction='none';
+  const cs = getComputedStyle(slot);
+  const availW = slot.clientWidth  - (parseFloat(cs.paddingLeft)||0) - (parseFloat(cs.paddingRight)||0);
+  const availH = slot.clientHeight - (parseFloat(cs.paddingTop)||0)  - (parseFloat(cs.paddingBottom)||0);
+
+  let fill = fillBase;
+  const longest = Math.max(cols, rows);
+  if (longest >= 4) fill *= 0.92;      // 大形狀略縮
+  if (longest <= 2) fill *= 1.10;      // 小形狀放大
+  if (cols === 1 && rows === 1) fill *= 1.18; // 1×1 再多一點
+
+  const s = Math.min(maxS, Math.min(availW / naturalW, availH / naturalH) * fill);
+
+  pieceEl.style.transformOrigin = 'center center';
+  pieceEl.style.transform = `scale(${s})`;
+  pieceEl.dataset.scale = s;
+  pieceEl.dataset.cols = cols;
+  pieceEl.dataset.rows = rows;
+  pieceEl.style.willChange = 'transform';
 }
 function renderPieceInto(slotEl,p){
   slotEl.innerHTML=""; if(!p){ slotEl.classList.add("empty"); return; }
@@ -232,8 +241,7 @@ function renderTray(){
 }
 function fitTrayPieces(){
   $$(".slot .piece").forEach(el=>{
-    const slot=el.closest('.slot');
-    if(!slot) return;
+    const slot=el.closest('.slot'); if(!slot) return;
     const cols=Number(el.dataset.cols)||parseInt((el.style.gridTemplateColumns.match(/repeat\((\d+)/)||[])[1]||'1',10);
     const rows=Number(el.dataset.rows)||parseInt((el.style.gridTemplateRows.match(/repeat\((\d+)/)||[])[1]||'1',10);
     fitPieceIntoSlot(el, slot, cols, rows);
@@ -261,11 +269,18 @@ const ro=new ResizeObserver(()=>requestAnimationFrame(positionOverlayLayers));
 boardEl && ro.observe(boardEl);
 positionOverlayLayers();
 
+/* 小數座標 + 右/下夾取，避免外溢 */
 function cellRectRel(x, y){
   if(x<0||y<0||x>=SIZE||y>=SIZE) return null;
   const r  = cellAt(x,y).getBoundingClientRect();
   const br = boardEl.getBoundingClientRect();
-  return { left: r.left - br.left, top: r.top - br.top, width: r.width, height: r.height };
+
+  const left = r.left - br.left;
+  const top  = r.top  - br.top;
+  const right  = Math.min(br.width,  left + r.width);
+  const bottom = Math.min(br.height, top  + r.height);
+
+  return { left, top, width: right - left, height: bottom - top };
 }
 
 /* ========= 分數 / FEVER / COMBO ========= */
@@ -364,7 +379,7 @@ function showHint(){
     if(!rr) return;
     const g=document.createElement("div");
     g.className="ghost-cell";
-    g.style.left=px(rr.left); g.style.top=px(rr.top); g.style.width=px(rr.width); g.style.height=px(rr.height);
+    g.style.left=rr.left+"px"; g.style.top=rr.top+"px"; g.style.width=rr.width+"px"; g.style.height=rr.height+"px";
     ghostEl.appendChild(g);
   });
   hintData=b; state.hintShown=true;
@@ -547,16 +562,16 @@ function showClearPreview(ax,ay,piece,ok){
   const mkRow=(y)=>{
     const r0=cellRectRel(0,y), r1=cellRectRel(SIZE-1,y); if(!r0||!r1) return;
     const n=document.createElement('div');
-    n.style.position='absolute'; n.style.left=px(r0.left); n.style.top=px(r0.top);
-    n.style.width=px(r1.left+r1.width-r0.left); n.style.height=px(r0.height);
+    n.style.position='absolute'; n.style.left=r0.left+"px"; n.style.top=r0.top+"px";
+    n.style.width=(r1.left+r1.width-r0.left)+"px"; n.style.height=r0.height+"px";
     n.style.background='rgba(62,240,180,.12)'; n.style.boxShadow='0 0 0 2px rgba(62,240,180,.35) inset'; n.style.borderRadius='8px';
     ghostEl.appendChild(n); drag.lineNodes.push(n);
   };
   const mkCol=(x)=>{
     const r0=cellRectRel(x,0), r1=cellRectRel(x,SIZE-1); if(!r0||!r1) return;
     const n=document.createElement('div');
-    n.style.position='absolute'; n.style.left=px(r0.left); n.style.top=px(r0.top);
-    n.style.width=px(r0.width); n.style.height=px(r1.top+r1.height-r0.top);
+    n.style.position='absolute'; n.style.left=r0.left+"px"; n.style.top=r0.top+"px";
+    n.style.width=r0.width+"px"; n.style.height=(r1.top+r1.height-r0.top)+"px";
     n.style.background='rgba(62,240,180,.10)'; n.style.boxShadow='0 0 0 2px rgba(62,240,180,.32) inset'; n.style.borderRadius='8px';
     ghostEl.appendChild(n); drag.lineNodes.push(n);
   };
@@ -662,7 +677,12 @@ function updateGhost(clientX,clientY){
   positionOverlayLayers();
   let hit = cellIndexFromPoint(clientX,clientY);
   if(hit.gx<0 || hit.gy<0) hit = nearestCellFromPoint(clientX,clientY);
-  if(hit.gx<0 || hit.gy<0){ drag && (drag.anchor=null); clearHighlight(); if(drag && drag.lineNodes){ drag.lineNodes.forEach(n=>n.remove()); drag.lineNodes=[]; } return; }
+  if(hit.gx<0 || hit.gy<0){
+    if(drag) { drag.anchor=null; }
+    clearHighlight();
+    if(drag && drag.lineNodes){ drag.lineNodes.forEach(n=>n.remove()); drag.lineNodes=[]; }
+    return;
+  }
 
   const sx=drag.grab.sx, sy=drag.grab.sy;
   let ax = hit.gx - sx, ay = hit.gy - sy;
@@ -678,8 +698,10 @@ function updateGhost(clientX,clientY){
   drag.ghostNodes.forEach((node,i)=>{
     const [dx,dy]=drag.piece.cells[i];
     const rr=cellRectRel(ax+dx, ay+dy); if(!rr) return;
-    node.style.left=px(Math.round(rr.left)); node.style.top=px(Math.round(rr.top));
-    node.style.width=px(Math.round(rr.width)); node.style.height=px(Math.round(rr.height));
+    node.style.left  = rr.left  + "px";
+    node.style.top   = rr.top   + "px";
+    node.style.width = rr.width + "px";
+    node.style.height= rr.height+ "px";
     node.className = "ghost-cell" + (ok?"":" ghost-invalid");
   });
 
@@ -922,7 +944,7 @@ function animateProxyTo(el,x,y,ms,easing){ return new Promise(res=>{ el.style.tr
 async function tutorialPlace(best){
   if(state.tutorial.busy) return; state.tutorial.busy=true;
   clearGhost();
-  best.p.cells.forEach(([dx,dy])=>{ const rr=cellRectRel(best.x+dx, best.y+dy); if(!rr) return; const g=document.createElement("div"); g.className="ghost-cell"; g.style.left=px(rr.left); g.style.top=px(rr.top); g.style.width=px(rr.width); g.style.height=px(rr.height); ghostEl.appendChild(g); });
+  best.p.cells.forEach(([dx,dy])=>{ const rr=cellRectRel(best.x+dx, best.y+dy); if(!rr) return; const g=document.createElement("div"); g.className="ghost-cell"; g.style.left=rr.left+"px"; g.style.top=rr.top+"px"; g.style.width=rr.width+"px"; g.style.height=rr.height+"px"; ghostEl.appendChild(g); });
   const slot=document.querySelector(`.slot[data-index="${best.idx}"]`); const fromEl=slot?.querySelector('.piece'); if(!fromEl){ state.tutorial.busy=false; return; }
   const proxy=fromEl.cloneNode(true); proxy.className="guide-proxy"; document.body.appendChild(proxy);
   const trayCell=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tray-cell'))||30; const gap=parseFloat(getComputedStyle(fromEl).gap)||4; const naturalW=best.p.w*trayCell+(best.p.w-1)*gap; const bboxW=fromEl.getBoundingClientRect().width; const scale=parseFloat(fromEl.dataset.scale)||(bboxW/naturalW); proxy.dataset.scale=scale;
